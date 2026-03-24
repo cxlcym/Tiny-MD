@@ -1,0 +1,25 @@
+.status-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 12px;
+  background: #007acc;
+  color: white;
+  font-size: 12px;
+  user-select: none;
+}
+
+.status-left,
+.status-right {
+  display: flex;
+  gap: 16px;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+}
+
+.status-item.filename {
+  font-weight: 500;
+}

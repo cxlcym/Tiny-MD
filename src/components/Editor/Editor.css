@@ -1,0 +1,32 @@
+.editor-container {
+  flex: 1;
+  overflow: hidden;
+}
+
+.editor-container .cm-editor {
+  height: 100%;
+}
+
+/* Dark theme for CodeMirror */
+.cm-theme-dark {
+  --cm-bg: #1e1e1e;
+  --cm-text: #d4d4d4;
+  --cm-cursor: #d4d4d4;
+  --cm-gutter-bg: #1e1e1e;
+  --cm-gutter-text: #858585;
+  --cm-gutter-border: #333;
+  --cm-active-line-bg: rgba(255, 255, 255, 0.05);
+  --cm-selection-bg: #264f78;
+}
+
+/* Light theme for CodeMirror */
+.cm-theme-light {
+  --cm-bg: #ffffff;
+  --cm-text: #333333;
+  --cm-cursor: #333333;
+  --cm-gutter-bg: #f5f5f5;
+  --cm-gutter-text: #999999;
+  --cm-gutter-border: #e0e0e0;
+  --cm-active-line-bg: rgba(0, 0, 0, 0.05);
+  --cm-selection-bg: #add6ff;
+}

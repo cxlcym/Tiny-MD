@@ -1,0 +1,55 @@
+.quick-edit {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.quick-edit-group {
+  display: flex;
+  gap: 2px;
+}
+
+.quick-edit-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border-color);
+  margin: 0 4px;
+}
+
+.quick-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.quick-btn:hover {
+  background: var(--bg-input);
+  border-color: var(--border-color);
+}
+
+.quick-btn:active {
+  background: var(--bg-hover);
+}
+
+.quick-btn svg {
+  opacity: 0.8;
+}
+
+.quick-btn:hover svg {
+  opacity: 1;
+}
