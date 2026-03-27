@@ -189,8 +189,10 @@ photos: []
     document.body.className = config.theme
   }, [config.theme])
 
-  // Before unload warning
+  // Before unload warning (only in browser, not in Electron desktop)
   useEffect(() => {
+    if (window.electronAPI?.isElectron) return // Skip in desktop app
+    
     const handleBeforeUnload = (e) => {
       if (isModified) {
         e.preventDefault()
@@ -296,8 +298,29 @@ photos: []
     })
   }
 
-  // Helper function to save file using File System Access API or download
+  // Check if running in Electron desktop
+  const isDesktop = window.electronAPI?.isElectron === true
+
+  // Helper function to save file - Desktop version saves directly, browser version uses download
   const saveImageFile = async (blob, imageName) => {
+    if (isDesktop) {
+      try {
+        const arrayBuffer = await blob.arrayBuffer()
+        const uint8Array = new Uint8Array(arrayBuffer)
+        const result = await window.electronAPI.saveImage({
+          imageData: Array.from(uint8Array),
+          fileName: imageName
+        })
+        if (result.success) {
+          return result.path
+        }
+        return null
+      } catch (err) {
+        console.error('Failed to save image via Electron:', err)
+        return null
+      }
+    }
+
     if (window.showSaveFilePicker) {
       try {
         const handle = await window.showSaveFilePicker({
@@ -310,15 +333,14 @@ photos: []
         const writable = await handle.createWritable()
         await writable.write(blob)
         await writable.close()
-        return true
+        return imageName
       } catch (err) {
         if (err.name === 'AbortError') {
-          return false // User cancelled
+          return null
         }
-        // Fallback to download
       }
     }
-    
+
     // Download fallback
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -326,14 +348,13 @@ photos: []
     a.download = imageName
     a.click()
     URL.revokeObjectURL(url)
-    return true
+    return imageName
   }
 
   const handleClipboardImage = useCallback(async (file) => {
     try {
       const timestamp = Date.now()
       const imageName = `image_${timestamp}.webp`
-      const localPath = `./${imageName}`
 
       // Convert to WebP
       const blob = await convertToWebP(file)
@@ -341,20 +362,26 @@ photos: []
       // Convert to data URL for preview
       const dataUrl = await blobToDataURL(blob)
 
-      // Store in image map for preview
+      // Save file and get the path - user will choose location
+      const savedPath = await saveImageFile(blob, imageName)
+      
+      // If user cancelled or save failed, don't insert
+      if (!savedPath) {
+        return
+      }
+
+      // Normalize path to use forward slashes for consistency
+      const normalizedPath = savedPath.replace(/\\/g, '/')
+
+      // Store in image map for preview (use normalized path as key)
       setImageMap(prev => ({
         ...prev,
-        [localPath]: dataUrl
+        [normalizedPath]: dataUrl
       }))
 
-      // Save file
-      const saved = await saveImageFile(blob, imageName)
-      
-      if (saved) {
-        // Insert local path reference
-        const imageMarkdown = `![image](${localPath})\n`
-        setContent(prev => prev + '\n' + imageMarkdown)
-      }
+      // Insert markdown image reference with normalized path
+      const imageMarkdown = `![image](${normalizedPath})`
+      setContent(prev => prev + '\n' + imageMarkdown)
     } catch (err) {
       console.error('Failed to process clipboard image:', err)
     }
@@ -446,7 +473,33 @@ photos: []
     if (!checkUnsaved()) return
     
     try {
-      if (window.showOpenFilePicker) {
+      if (isDesktop) {
+        const result = await window.electronAPI.openFileDialog()
+        if (result.success) {
+          const newFile = {
+            path: result.filePath,
+            name: result.fileName,
+            content: result.content,
+            savedContent: result.content,
+            isModified: false,
+            fileHandle: null
+          }
+          
+          setFiles(prevFiles => {
+            const existingIndex = prevFiles.findIndex(f => f.path === result.filePath)
+            if (existingIndex >= 0) {
+              return prevFiles.map((f, i) => i === existingIndex ? newFile : f)
+            }
+            return [...prevFiles, newFile]
+          })
+          
+          setContent(result.content)
+          setFileName(result.fileName)
+          setSavedContent(result.content)
+          setFileHandle(result.filePath)
+          setCurrentFilePath(result.filePath)
+        }
+      } else if (window.showOpenFilePicker) {
         const [handle] = await window.showOpenFilePicker({
           types: [{
             description: 'Markdown Files',
@@ -520,6 +573,38 @@ photos: []
 
   const handleSaveFile = useCallback(async () => {
     try {
+      if (isDesktop) {
+        // In desktop mode, if we have a file path, save directly
+        if (fileHandle && typeof fileHandle === 'string') {
+          const result = await window.electronAPI.saveFile({
+            filePath: fileHandle,
+            content
+          })
+          if (result.success) {
+            setSavedContent(content)
+          }
+          return
+        }
+        
+        // Otherwise show save dialog
+        const result = await window.electronAPI.saveFileDialog({
+          defaultName: fileName
+        })
+        if (result.success) {
+          const saveResult = await window.electronAPI.saveFile({
+            filePath: result.filePath,
+            content
+          })
+          if (saveResult.success) {
+            setSavedContent(content)
+            setFileHandle(result.filePath)
+            setFileName(result.filePath.split(/[\\/]/).pop())
+          }
+        }
+        return
+      }
+      
+      // Browser mode
       // If we have a file handle, write directly to it
       if (fileHandle) {
         const writable = await fileHandle.createWritable()
@@ -564,6 +649,24 @@ photos: []
 
   const handleSaveAsFile = useCallback(async () => {
     try {
+      if (isDesktop) {
+        const result = await window.electronAPI.saveFileDialog({
+          defaultName: fileName
+        })
+        if (result.success) {
+          const saveResult = await window.electronAPI.saveFile({
+            filePath: result.filePath,
+            content
+          })
+          if (saveResult.success) {
+            setSavedContent(content)
+            setFileHandle(result.filePath)
+            setFileName(result.filePath.split(/[\\/]/).pop())
+          }
+        }
+        return
+      }
+      
       if (window.showSaveFilePicker) {
         const handle = await window.showSaveFilePicker({
           suggestedName: fileName,
@@ -786,6 +889,60 @@ photos: []
     if (!checkUnsaved()) return
     
     try {
+      if (isDesktop) {
+        setIsLoading(true)
+        const result = await window.electronAPI.openFolderDialog()
+        
+        if (result.success) {
+          const dirResult = await window.electronAPI.readDirectory({
+            dirPath: result.folderPath
+          })
+          
+          if (dirResult.success) {
+            setFolderTree(dirResult.entries)
+            
+            // Collect all markdown files from tree
+            const allFiles = []
+            const flattenTree = (nodes) => {
+              Object.values(nodes).forEach(node => {
+                if (node.isFolder && node.children) {
+                  flattenTree(node.children)
+                } else if (!node.isFolder && node.content !== undefined) {
+                  allFiles.push({
+                    path: `${result.folderPath}/${node.path}`,
+                    name: node.name,
+                    content: node.content,
+                    savedContent: node.savedContent,
+                    isModified: false,
+                    fileHandle: null
+                  })
+                }
+              })
+            }
+            flattenTree(dirResult.entries)
+            
+            if (allFiles.length > 0) {
+              setFiles(allFiles)
+              const firstFile = allFiles[0]
+              setContent(firstFile.content)
+              setSavedContent(firstFile.savedContent)
+              setFileName(firstFile.name)
+              setCurrentFilePath(firstFile.path)
+              setFileHandle(null)
+            } else {
+              setFiles([])
+              setContent('')
+              setSavedContent('')
+              setFileName('untitled.md')
+              setCurrentFilePath('')
+              setFileHandle(null)
+            }
+          }
+        }
+        setIsLoading(false)
+        return
+      }
+      
       if (window.showDirectoryPicker) {
         setIsLoading(true)
         const handle = await window.showDirectoryPicker()

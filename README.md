@@ -6,9 +6,9 @@
 ![Version](https://img.shields.io/badge/version-1.0.0-green)
 ![License](https://img.shields.io/badge/license-MIT-yellow)
 
-一款轻量级且灵活的 Markdown 编辑器
+一款轻量级且灵活的 Markdown 编辑器，支持 Web 版和桌面版
 
-[功能特性](#功能特性) • [快速开始](#快速开始) • [使用指南](#使用指南) • [快捷键](#快捷键)
+[功能特性](#功能特性) • [下载安装](#-下载安装) • [快速开始](#-快速开始) • [使用指南](#-使用指南) • [快捷键](#️-快捷键)
 
 </div>
 
@@ -16,7 +16,14 @@
 
 ## 📖 简介
 
-Tiny Markdown Editor（Tiny MD）是一款轻量级且灵活的 Markdown 编辑器，支持四栏布局（文件管理器/源码/预览/翻译）、YAML 模板系统、多图床集成、五种翻译引擎、自定义预览样式等功能。适用于技术文档编写、博客发布和 README 维护场景。
+Tiny Markdown Editor（Tiny MD）是一款轻量级且灵活的 Markdown 编辑器，支持四栏布局（文件管理器/源码/预览/翻译）、YAML 模板系统、多图床集成、五种翻译引擎、自定义预览样式等功能。提供 **Web 版**和**桌面版（Electron）**两种形态，适用于技术文档编写、博客发布和 README 维护场景。
+
+### 🖥️ 桌面版特性
+
+桌面版基于 Electron 构建，相比 Web 版具有以下优势：
+- **本地文件系统访问**：无需依赖 File System Access API
+- **图片粘贴优化**：粘贴图片时弹出保存对话框，用户选择位置后自动插入 Markdown 格式
+- **更好的性能**：优化的内存管理和窗口关闭逻辑
 
 ## ✨ 功能特性
 
@@ -79,6 +86,36 @@ Tiny Markdown Editor（Tiny MD）是一款轻量级且灵活的 Markdown 编辑�
 - ✅ 源码与预览实时同步滚动
 - ✅ 字数统计
 - ✅ 光标位置显示
+
+---
+
+## 📥 下载安装
+
+### 桌面版（推荐）
+
+直接下载便携版，无需安装：
+
+| 平台 | 下载 |
+|------|------|
+| Windows | [Tiny MD 1.0.0.exe](release/Tiny%20MD%201.0.0.exe) |
+
+> 桌面版特性：
+> - 便携版，下载后双击即可运行
+> - 图片粘贴时弹出保存对话框，选择位置后自动插入 Markdown 格式
+> - 支持本地文件系统完整访问
+
+### Web 版
+
+如果只需要 Web 版，可以克隆项目后自行构建：
+
+```bash
+git clone https://github.com/your-username/tiny-md.git
+cd tiny-md
+npm install
+npm run build
+```
+
+构建后的文件在 `dist` 目录中。
 
 ---
 
@@ -163,8 +200,8 @@ npm run build
 2. **剪贴板粘贴**
    - 复制图片到剪贴板
    - 在编辑器中按 `Ctrl+V`
-   - 图片自动转换为 WebP 并下载
-   - 插入本地路径引用
+   - **桌面版**：弹出保存对话框，选择位置后自动插入 `![image](path)`
+   - **Web 版**：图片自动转换为 WebP 并下载，插入本地路径引用
 
 ### 翻译功能
 
@@ -203,6 +240,7 @@ npm run build
 ## 🛠️ 技术栈
 
 - **前端框架**: React 18 + Vite
+- **桌面框架**: Electron 41
 - **编辑器核心**: CodeMirror 6
 - **Markdown 解析**: Marked
 - **代码高亮**: Highlight.js
@@ -214,6 +252,9 @@ npm run build
 
 ```
 tiny-md/
+├── electron/
+│   ├── main.cjs             # Electron 主进程
+│   └── preload.cjs          # Electron 预加载脚本
 ├── src/
 │   ├── components/
 │   │   ├── Editor/          # CodeMirror 编辑器
@@ -234,6 +275,8 @@ tiny-md/
 │   ├── App.jsx              # 主应用组件
 │   ├── App.css              # 应用样式
 │   └── index.css            # 全局样式
+├── release/                 # 桌面版构建产物
+│   └── Tiny MD 1.0.0.exe   # Windows 便携版
 ├── public/                  # 静态资源
 ├── package.json
 └── vite.config.js

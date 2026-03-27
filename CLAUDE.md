@@ -2,11 +2,12 @@
 
 ## 项目概述
 
-Tiny Markdown Editor（Tiny MD）是一款基于 React + Vite 的轻量级且灵活的 Markdown 编辑器，专为开发者设计。支持四栏布局（文件管理器、源码编辑、预览、翻译）、YAML 模板、图床集成和多引擎翻译。
+Tiny Markdown Editor（Tiny MD）是一款基于 React + Vite 的轻量级且灵活的 Markdown 编辑器，专为开发者设计。支持四栏布局（文件管理器、源码编辑、预览、翻译）、YAML 模板、图床集成和多引擎翻译。提供 Web 版和桌面版（Electron）两种形态。
 
 ## 技术栈
 
 - **前端框架**: React 18 + Vite
+- **桌面框架**: Electron 41
 - **编辑器核心**: CodeMirror 6
 - **Markdown 解析**: Marked
 - **代码高亮**: Highlight.js
@@ -16,6 +17,9 @@ Tiny Markdown Editor（Tiny MD）是一款基于 React + Vite 的轻量级且灵
 
 ```
 tiny-md/
+├── electron/
+│   ├── main.cjs             # Electron 主进程
+│   └── preload.cjs          # Electron 预加载脚本
 ├── src/
 │   ├── components/
 │   │   ├── Editor/          # CodeMirror 编辑器组件
@@ -40,6 +44,8 @@ tiny-md/
 │   ├── App.jsx              # 主应用组件
 │   ├── App.css              # 应用样式 (主题变量)
 │   └── index.css            # 全局样式
+├── release/                 # 桌面版构建产物
+│   └── Tiny MD 1.0.0.exe   # Windows 便携版
 ├── package.json
 └── vite.config.js
 ```
@@ -82,6 +88,7 @@ tiny-md/
 - Cloudflare R2 支持
 - AWS S3 支持
 - 剪贴板图片自动转换 WebP
+- 桌面版支持用户选择保存位置后自动插入 Markdown 格式
 
 ### 6. YAMLTemplate (模板)
 - 预设 Hugo/Hexo 模板
@@ -93,17 +100,63 @@ tiny-md/
 - 支持添加自定义 CSS 样式
 - 样式保存到 localStorage
 
+## 桌面版特性
+
+桌面版基于 Electron 构建，相比 Web 版具有以下优势：
+
+1. **本地文件系统访问**：无需依赖 File System Access API
+2. **图片处理优化**：
+   - 粘贴图片时弹出保存对话框
+   - 用户选择位置后自动插入 `![image](path)` Markdown 格式
+   - 路径统一使用正斜杠 `/`，确保跨平台兼容
+3. **性能优化**：
+   - 启用 backgroundThrottling 减少后台内存消耗
+   - 简化的窗口关闭逻辑，确保正常退出
+4. **IPC 通信**：
+   - 通过 preload.cjs 安全暴露 Electron API
+   - 支持图片保存、文件打开/保存、目录读取等操作
+
+## 桌面版开发注意事项
+
+1. **模块系统**：
+   - Electron 主进程使用 CommonJS（.cjs 扩展名）
+   - 渲染进程使用 ES Modules
+   - package.json 中 `type: "module"`，通过 extraMetadata 覆盖为 `commonjs`
+
+2. **路径处理**：
+   - Windows 路径中的反斜杠需要统一转换为正斜杠
+   - 使用 `app.getAppPath()` 获取正确的应用路径
+
+3. **窗口关闭**：
+   - 移除 beforeunload 事件监听器（在桌面版中会导致无法关闭）
+   - 使用 `app.quit()` 确保正常退出
+
 ## 开发命令
 
 ```bash
 # 安装依赖
 npm install
 
-# 启动开发服务器
+# 启动开发服务器 (Web 版)
 npm run dev
 
-# 构建生产版本
+# 启动桌面版开发模式
+npm run electron:dev
+
+# 构建生产版本 (Web 版)
 npm run build
+
+# 构建桌面版 (Windows)
+npm run electron:build:win
+
+# 构建桌面版 (macOS)
+npm run electron:build:mac
+
+# 构建桌面版 (Linux)
+npm run electron:build:linux
+
+# 仅打包不生成安装程序
+npm run electron:pack
 
 # 预览构建结果
 npm run preview

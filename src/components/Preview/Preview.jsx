@@ -62,7 +62,14 @@ function Preview({ content, theme, imageMap, currentStyle, customStyles }) {
     // Replace local image paths with base64 data URLs from imageMap
     if (imageMap && Object.keys(imageMap).length > 0) {
       body = body.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
+        // Normalize the src path for comparison
+        const normalizedSrc = src.replace(/\\/g, '/')
+        
         // Check if this is a local path that we have a mapping for
+        if (imageMap[normalizedSrc]) {
+          return `![${alt}](${imageMap[normalizedSrc]})`
+        }
+        // Also try the original src
         if (imageMap[src]) {
           return `![${alt}](${imageMap[src]})`
         }
