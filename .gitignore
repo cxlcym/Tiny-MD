@@ -23,5 +23,5 @@ dist-ssr
 *.sln
 *.sw?
 
-# Release builds are tracked for GitHub releases
-# release/
+# Release builds
+release/

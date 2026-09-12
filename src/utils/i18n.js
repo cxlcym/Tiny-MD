@@ -107,6 +107,19 @@ export const translations = {
     deeplApiKeyHint: 'Get free API key at deepl.com/pro-api (500,000 chars/month free)',
     libretranslateEndpoint: 'LibreTranslate Endpoint',
     libretranslateEndpointHint: 'Default: https://libretranslate.com (or your self-hosted instance)',
+    // Files & dialogs
+    files: 'Files',
+    closeUnsavedConfirm: 'File "{name}" has unsaved changes. Save before closing?',
+    deleteFileConfirm: 'Are you sure you want to delete this file?',
+    unsaved: 'Unsaved',
+    rename: 'Rename',
+    close: 'Close',
+    renameFailed: 'Rename failed: {message}',
+    deleteFailed: 'Delete failed: {message}',
+    openFolderUnsupported: 'Your browser does not support opening folders. Please use Chrome, Edge or other browsers with File System Access API.',
+    folderOpenFailed: 'Failed to open folder: {message}',
+    // Security
+    storageWarning: 'Keys are stored in plain text in localStorage. Do not use on a shared computer.',
   },
   'zh-CN': {
     // App
@@ -216,6 +229,19 @@ export const translations = {
     deeplApiKeyHint: '在 deepl.com/pro-api 获取免费 API 密钥（每月 50 万字符免费）',
     libretranslateEndpoint: 'LibreTranslate 服务地址',
     libretranslateEndpointHint: '默认：https://libretranslate.com（或您的自托管实例）',
+    // Files & dialogs
+    files: '文件',
+    closeUnsavedConfirm: '文件 "{name}" 有未保存的更改，关闭前是否保存？',
+    deleteFileConfirm: '确定要删除这个文件吗？',
+    unsaved: '未保存',
+    rename: '重命名',
+    close: '关闭',
+    renameFailed: '重命名失败：{message}',
+    deleteFailed: '删除失败：{message}',
+    openFolderUnsupported: '您的浏览器不支持打开文件夹功能。请使用 Chrome、Edge 或其他支持 File System Access API 的浏览器。',
+    folderOpenFailed: '打开文件夹失败：{message}',
+    // Security
+    storageWarning: '密钥以明文保存在 localStorage 中，请勿在公用电脑上使用。',
   }
 }
 

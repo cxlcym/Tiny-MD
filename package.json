@@ -1,7 +1,9 @@
 {
   "name": "tiny-md",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.2",
+  "description": "A lightweight and flexible Markdown editor with web and desktop (Electron) versions",
+  "author": "jack Cao",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -25,12 +27,12 @@
     "@codemirror/search": "^6.6.0",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.40.0",
+    "dompurify": "^3.4.15",
     "highlight.js": "^11.11.1",
-    "katex": "^0.16.40",
     "marked": "^17.0.5",
+    "marked-highlight": "^2.2.4",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "uuid": "^13.0.0"
+    "react-dom": "^19.2.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
@@ -51,6 +53,8 @@
     "appId": "com.tiny-md.app",
     "productName": "Tiny MD",
     "forceCodeSigning": false,
+    "compression": "maximum",
+    "removePackageScripts": true,
     "extraMetadata": {
       "type": "commonjs"
     },
@@ -61,7 +65,20 @@
       "dist/**/*",
       "electron/**/*",
       "!node_modules/**/*.ts",
-      "!node_modules/**/*.map"
+      "!node_modules/**/*.map",
+      "!node_modules/**/*.md",
+      "!node_modules/**/*.d.ts",
+      "!node_modules/**/test/**",
+      "!node_modules/**/tests/**",
+      "!node_modules/**/example/**",
+      "!node_modules/**/examples/**",
+      "!node_modules/**/.github/**",
+      "!node_modules/**/CHANGELOG*",
+      "!node_modules/**/README*",
+      "!node_modules/**/LICENSE*"
+    ],
+    "asarUnpack": [
+      "**/*.node"
     ],
     "win": {
       "target": [

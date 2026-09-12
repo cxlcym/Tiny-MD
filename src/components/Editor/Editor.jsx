@@ -9,7 +9,9 @@ import { autocompletion, closeBrackets } from '@codemirror/autocomplete'
 import { linter } from '@codemirror/lint'
 import './Editor.css'
 
-// Markdown syntax error linter
+// Markdown syntax hints. Deliberately low-severity: the heuristics below flag
+// plenty of legitimate markdown (multi-line bold, literal asterisks), so these
+// are hints, not errors.
 const markdownLinter = linter((view) => {
   const diagnostics = []
   const doc = view.state.doc.toString()
@@ -17,7 +19,7 @@ const markdownLinter = linter((view) => {
 
   lines.forEach((line, lineIndex) => {
     if (!line.trim()) return
-    
+
     const lineStart = view.state.doc.line(lineIndex + 1).from
 
     // Check for unclosed bold
@@ -28,7 +30,7 @@ const markdownLinter = linter((view) => {
         diagnostics.push({
           from: lineStart + lastBold,
           to: lineStart + lastBold + 2,
-          severity: 'error',
+          severity: 'info',
           message: 'Unclosed bold marker **'
         })
       }
@@ -47,23 +49,8 @@ const markdownLinter = linter((view) => {
         diagnostics.push({
           from: lineStart + lastItalic,
           to: lineStart + lastItalic + 1,
-          severity: 'error',
+          severity: 'info',
           message: 'Unclosed italic marker *'
-        })
-      }
-    }
-
-    // Check for unclosed link syntax
-    const openBracket = (line.match(/\[/g) || []).length
-    const closeBracket = (line.match(/\]/g) || []).length
-    if (openBracket !== closeBracket) {
-      const lastOpenBracket = line.lastIndexOf('[')
-      if (lastOpenBracket !== -1) {
-        diagnostics.push({
-          from: lineStart + lastOpenBracket,
-          to: lineStart + lastOpenBracket + 1,
-          severity: 'error',
-          message: 'Unclosed link/image bracket'
         })
       }
     }
@@ -82,12 +69,19 @@ const markdownLinter = linter((view) => {
   })
 
   return diagnostics
-})
+}, { delay: 750 })
 
 const Editor = forwardRef(({ value, onChange, onCursorChange, onScroll, theme }, ref) => {
   const editorRef = useRef(null)
   const viewRef = useRef(null)
   const themeRef = useRef(theme)
+
+  // Keep latest callbacks accessible from the once-initialized editor without
+  // re-creating the EditorView
+  const handlersRef = useRef({ onChange, onCursorChange, onScroll })
+  useEffect(() => {
+    handlersRef.current = { onChange, onCursorChange, onScroll }
+  })
 
   // Update theme ref when theme changes
   useEffect(() => {
@@ -102,7 +96,40 @@ const Editor = forwardRef(({ value, onChange, onCursorChange, onScroll, theme },
     getView: () => viewRef.current,
     getState: () => viewRef.current?.state,
     dispatch: (transaction) => viewRef.current?.dispatch(transaction),
-    focus: () => viewRef.current?.focus()
+    focus: () => viewRef.current?.focus(),
+    insertAtCursor: (text) => {
+      const view = viewRef.current
+      if (view && view.state) {
+        const { from } = view.state.selection.main
+        view.dispatch({
+          changes: { from, to: from, insert: text },
+          selection: { anchor: from + text.length }
+        })
+        view.focus()
+        return true
+      }
+      return false
+    },
+    insertAtPos: (text, pos) => {
+      const view = viewRef.current
+      if (view && view.state) {
+        const insertPos = Math.min(Math.max(0, pos), view.state.doc.length)
+        view.dispatch({
+          changes: { from: insertPos, to: insertPos, insert: text },
+          selection: { anchor: insertPos + text.length }
+        })
+        view.focus()
+        return true
+      }
+      return false
+    },
+    getCursorPos: () => {
+      const view = viewRef.current
+      if (view && view.state) {
+        return view.state.selection.main.head
+      }
+      return -1
+    }
   }))
 
   // Initialize editor once
@@ -130,11 +157,11 @@ const Editor = forwardRef(({ value, onChange, onCursorChange, onScroll, theme },
         ]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
-            onChange(update.state.doc.toString())
+            handlersRef.current.onChange(update.state.doc.toString())
           }
           const pos = update.state.selection.main.head
           const line = update.state.doc.lineAt(pos)
-          onCursorChange(line.number, pos - line.from + 1)
+          handlersRef.current.onCursorChange(line.number, pos - line.from + 1)
         }),
         EditorView.baseTheme({
           '&': {
@@ -191,9 +218,10 @@ const Editor = forwardRef(({ value, onChange, onCursorChange, onScroll, theme },
     // Add scroll listener to the scroller element for real-time sync
     const scroller = view.scrollDOM
     const handleScroll = () => {
-      if (onScroll) {
+      const { onScroll: scrollHandler } = handlersRef.current
+      if (scrollHandler) {
         const { scrollTop, scrollHeight, clientHeight } = scroller
-        onScroll({ scrollTop, scrollHeight, clientHeight })
+        scrollHandler({ scrollTop, scrollHeight, clientHeight })
       }
     }
     scroller.addEventListener('scroll', handleScroll)
@@ -203,9 +231,11 @@ const Editor = forwardRef(({ value, onChange, onCursorChange, onScroll, theme },
       view.destroy()
       viewRef.current = null
     }
-  }, []) // Empty deps - initialize once only
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Initialize once; callbacks are read through handlersRef, value synced below
 
-  // Sync value changes to editor
+  // Sync external value changes into the editor (value is intentionally
+  // compared against the doc rather than re-applied on every keystroke)
   useEffect(() => {
     if (viewRef.current) {
       const currentContent = viewRef.current.state.doc.toString()

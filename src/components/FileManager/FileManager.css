@@ -205,9 +205,16 @@
   transition: opacity 0.15s;
 }
 
-.file-item:hover .file-actions,
 .file-item.active .file-actions {
   opacity: 1;
+}
+
+.file-item.active .action-btn svg {
+  fill: rgba(255, 255, 255, 0.8) !important;
+}
+
+.file-item.active .action-btn:hover svg {
+  fill: #fff !important;
 }
 
 .action-btn {
@@ -235,6 +242,14 @@
 
 .action-btn:hover svg {
   fill: #fff !important;
+}
+
+.action-btn.close-btn:hover {
+  background: rgba(244, 67, 54, 0.2);
+}
+
+.action-btn.close-btn:hover svg {
+  fill: #f44336 !important;
 }
 
 .rename-input {

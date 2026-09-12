@@ -9,75 +9,99 @@ import YAMLTemplateModal from './components/YAMLTemplate/YAMLTemplateModal'
 import ImageUpload from './components/ImageUpload/ImageUpload'
 import SettingsModal from './components/Settings/SettingsModal'
 import QuickEdit from './components/QuickEdit/QuickEdit'
+import HljsTheme from './components/HljsTheme/HljsTheme'
+import { useFileWorkspace, DEFAULT_CONTENT } from './hooks/useFileWorkspace'
 import { useLocalStorage } from './hooks/useLocalStorage'
 import { extractYAML, replaceYAML } from './utils/yaml'
 import { PRESET_STYLES } from './components/StyleSelector/StyleSelector'
+import { convertToWebP, blobToDataURL, saveImageFile, openLocalImage, isDesktop } from './utils/imageUtils'
+import { t } from './utils/i18n'
 import './App.css'
 
-const DEFAULT_CONTENT = `---
-title: Welcome to Tiny MD
-date: ${new Date().toISOString().split('T')[0]}
-tags: []
-categories: []
-cover: 
-description: 
----
+const DEFAULT_PANEL_SIZES = [15, 28.33, 28.33, 28.34]
 
-# Hello Tiny MD
+function readStoredJSON(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key))
+  } catch {
+    return null
+  }
+}
 
-This is a smart Markdown editor for developers.
+// Make desktop folder tree node paths absolute so they match file entries
+function absolutizeTree(nodes, folderPath) {
+  return Object.fromEntries(
+    Object.entries(nodes).map(([key, node]) => [
+      key,
+      node.isFolder
+        ? { ...node, path: `${folderPath}/${node.path}`, children: absolutizeTree(node.children || {}, folderPath) }
+        : { ...node, path: `${folderPath}/${node.path}` }
+    ])
+  )
+}
 
-## Features
-
-- Real-time preview
-- YAML template system
-- Translation support
-- PicGo image upload
-`
+function collectFilesFromTree(nodes, { folderPath = '', handleFromNode = false } = {}) {
+  const out = []
+  const walk = (list) => {
+    Object.values(list).forEach(node => {
+      if (node.isFolder) {
+        walk(node.children || {})
+      } else {
+        const path = folderPath ? `${folderPath}/${node.path}` : node.path
+        out.push({
+          path,
+          name: node.name,
+          content: '',
+          savedContent: '',
+          isModified: false,
+          loaded: false,
+          fileHandle: handleFromNode ? node.handle : path
+        })
+      }
+    })
+  }
+  walk(nodes)
+  return out
+}
 
 function App() {
-  const [content, setContent] = useLocalStorage('tiny-md-content', DEFAULT_CONTENT)
-  const [fileName, setFileName] = useLocalStorage('tiny-md-filename', 'untitled.md')
+  const [initialState] = useState(() => ({
+    content: typeof readStoredJSON('tiny-md-content') === 'string' ? readStoredJSON('tiny-md-content') : DEFAULT_CONTENT,
+    fileName: typeof readStoredJSON('tiny-md-filename') === 'string' ? readStoredJSON('tiny-md-filename') : 'untitled.md'
+  }))
+  const ws = useFileWorkspace(initialState)
+  const { state, isModified, isModifiedRef, setContent, upsertFile, activateFile, renameFile, removeFile, replaceFiles, saveFileToDisk, saveActiveFile, saveActiveFileAs } = ws
+  const { content, fileName } = state
+
   const [cursorPos, setCursorPos] = useState({ line: 1, column: 1 })
   const [showYAMLModal, setShowYAMLModal] = useState(false)
   const [showImageUpload, setShowImageUpload] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const [panelSizes, setPanelSizes] = useState([15, 28.33, 28.33, 28.34])
+  const [panelSizes, setPanelSizes] = useState(() => {
+    const stored = readStoredJSON('tiny-md-panel-sizes')
+    return Array.isArray(stored) && stored.length === 4 ? stored : DEFAULT_PANEL_SIZES
+  })
   const editorRef = useRef(null)
   const previewRef = useRef(null)
   const containerRef = useRef(null)
   const [isDragging, setIsDragging] = useState(null)
   const startPosRef = useRef(null)
   const startSizesRef = useRef(null)
-  
-  // Track saved content and file handle for proper save
-  const [savedContent, setSavedContent] = useState(content)
-  const [fileHandle, setFileHandle] = useState(null)
-  const isModified = content !== savedContent
-  
-  // File manager state
-  const [files, setFiles] = useState([
-    {
-      path: fileName,
-      name: fileName,
-      content: content,
-      savedContent: savedContent,
-      isModified: isModified,
-      fileHandle: fileHandle
-    }
-  ])
-  const [currentFilePath, setCurrentFilePath] = useState(fileName)
+  const dragFrameRef = useRef(0)
+  const dragXRef = useRef(0)
+
+  const [currentFolderPath, setCurrentFolderPath] = useState('')
   const [fileManagerCollapsed, setFileManagerCollapsed] = useState(false)
   const [folderTree, setFolderTree] = useState(null)
-  
+
   // Image map: local path -> base64 data URL (for preview)
-  const [imageMap, setImageMap] = useLocalStorage('tiny-md-image-map', {})
-  
+  const [imageMap, setImageMap] = useLocalStorage('tiny-md-image-map', {}, { debounce: 500 })
+
   // Preview style
   const [currentStyle, setCurrentStyle] = useLocalStorage('tiny-md-style', 'default')
   const [customStyles, setCustomStyles] = useLocalStorage('tiny-md-custom-styles', [])
-  
+
   // App configuration
   const [config, setConfig] = useLocalStorage('tiny-md-config', {
     language: 'en',
@@ -133,44 +157,46 @@ photos: []
     }
   ])
 
+  const lang = config.language
+
   // Check if unsaved before dangerous actions
   const checkUnsaved = useCallback(() => {
-    if (isModified) {
-      const lang = config.language
-      const message = lang === 'zh-CN' 
-        ? '当前文件未保存，是否继续？' 
-        : 'Current file is not saved. Continue?'
-      return window.confirm(message)
+    if (isModifiedRef.current) {
+      return window.confirm(t('unsavedWarning', lang))
     }
     return true
-  }, [isModified, config.language])
+  }, [isModifiedRef, lang])
 
-  // Calculate word count
+  // Calculate word count (CJK-aware)
   const wordCount = useMemo(() => {
-    const text = content.replace(/---[\s\S]*?---/, '').trim()
-    return text.split(/\s+/).filter(w => w.length > 0).length
+    const { body, hasYAML } = extractYAML(content)
+    const text = hasYAML ? body : content
+    const trimmed = text.trim()
+    if (!trimmed) return 0
+    if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+      const segmenter = new Intl.Segmenter(undefined, { granularity: 'word' })
+      let count = 0
+      for (const segment of segmenter.segment(trimmed)) {
+        if (segment.isWordLike) count++
+      }
+      return count
+    }
+    return trimmed.split(/\s+/).filter(Boolean).length
   }, [content])
 
-  // Clean up unused images from imageMap
+  // Clean up image map entries no longer referenced in content
   useEffect(() => {
     if (Object.keys(imageMap).length === 0) return
 
-    // Find all image paths referenced in content
-    const imageRegex = /!\[[^\]]*\]\(([^)]+)\)/g
     const referencedPaths = new Set()
+    const imageRegex = /!\[[^\]]*\]\(([^)]+)\)/g
     let match
-
     while ((match = imageRegex.exec(content)) !== null) {
-      const src = match[1]
-      if (src.startsWith('./')) {
-        referencedPaths.add(src)
-      }
+      referencedPaths.add(match[1].replace(/\\/g, '/'))
     }
 
-    // Remove unused entries from imageMap
     const newImageMap = {}
     let hasChanges = false
-
     for (const [path, dataUrl] of Object.entries(imageMap)) {
       if (referencedPaths.has(path)) {
         newImageMap[path] = dataUrl
@@ -189,39 +215,65 @@ photos: []
     document.body.className = config.theme
   }, [config.theme])
 
-  // Before unload warning (only in browser, not in Electron desktop)
+  // Persist document content and filename (debounced to avoid writing on every keystroke)
   useEffect(() => {
-    if (window.electronAPI?.isElectron) return // Skip in desktop app
-    
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem('tiny-md-content', JSON.stringify(state.content))
+      } catch (err) {
+        console.error('Error writing to localStorage:', err)
+      }
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [state.content])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('tiny-md-filename', JSON.stringify(state.fileName))
+    } catch (err) {
+      console.error('Error writing to localStorage:', err)
+    }
+  }, [state.fileName])
+
+  // Before unload warning (browser only; desktop uses close-confirmation IPC)
+  useEffect(() => {
+    if (isDesktop) return
+
     const handleBeforeUnload = (e) => {
-      if (isModified) {
+      if (isModifiedRef.current) {
         e.preventDefault()
         e.returnValue = ''
       }
     }
     window.addEventListener('beforeunload', handleBeforeUnload)
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
-  }, [isModified])
+  }, [isModifiedRef])
 
-  // Panel resize handlers
-  const handleMouseDown = useCallback((index, e) => {
-    e.preventDefault()
-    setIsDragging(index)
-    startPosRef.current = e.clientX
-    startSizesRef.current = [...panelSizes]
-  }, [panelSizes])
+  // Desktop: ask the renderer before closing a window with unsaved changes
+  useEffect(() => {
+    if (!isDesktop || !window.electronAPI.onCloseRequested) return
 
-  const handleMouseMove = useCallback((e) => {
+    const unsubscribe = window.electronAPI.onCloseRequested(() => {
+      let proceed = true
+      if (isModifiedRef.current) {
+        proceed = window.confirm(t('unsavedWarning', lang))
+      }
+      window.electronAPI.confirmClose(proceed)
+    })
+    return unsubscribe
+  }, [isModifiedRef, lang])
+
+  // Panel resize handlers (requestAnimationFrame throttled)
+  const applyDrag = useCallback(() => {
+    dragFrameRef.current = 0
     if (isDragging === null || !containerRef.current) return
 
     const containerWidth = containerRef.current.offsetWidth
-    const deltaX = e.clientX - startPosRef.current
-    const deltaPercent = (deltaX / containerWidth) * 100
+    const deltaPercent = ((dragXRef.current - startPosRef.current) / containerWidth) * 100
 
     const newSizes = [...startSizesRef.current]
     const leftIndex = isDragging
     const rightIndex = isDragging + 1
-
     const minSize = 15
 
     const leftNew = Math.max(minSize, Math.min(70, newSizes[leftIndex] + deltaPercent))
@@ -234,11 +286,21 @@ photos: []
     }
   }, [isDragging])
 
+  const handleMouseMove = useCallback((e) => {
+    dragXRef.current = e.clientX
+    if (!dragFrameRef.current) {
+      dragFrameRef.current = requestAnimationFrame(applyDrag)
+    }
+  }, [applyDrag])
+
   const handleMouseUp = useCallback(() => {
     setIsDragging(null)
     document.body.style.cursor = ''
     document.body.style.userSelect = ''
-  }, [])
+    try {
+      localStorage.setItem('tiny-md-panel-sizes', JSON.stringify(panelSizes))
+    } catch { /* ignore */ }
+  }, [panelSizes])
 
   useEffect(() => {
     if (isDragging !== null) {
@@ -251,149 +313,96 @@ photos: []
     return () => {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
+      if (dragFrameRef.current) {
+        cancelAnimationFrame(dragFrameRef.current)
+        dragFrameRef.current = 0
+      }
     }
   }, [isDragging, handleMouseMove, handleMouseUp])
 
-  // Helper function to convert file to WebP blob
-  const convertToWebP = (file) => {
-    return new Promise((resolve, reject) => {
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d')
-      const img = new Image()
+  const handleMouseDown = useCallback((index, e) => {
+    e.preventDefault()
+    setIsDragging(index)
+    startPosRef.current = e.clientX
+    dragXRef.current = e.clientX
+    startSizesRef.current = [...panelSizes]
+  }, [panelSizes])
 
-      const reader = new FileReader()
-      reader.onerror = () => reject(new Error('Failed to read file'))
-      reader.onload = (event) => {
-        img.onerror = () => reject(new Error('Failed to load image'))
-        img.onload = () => {
-          canvas.width = img.width
-          canvas.height = img.height
-          ctx.drawImage(img, 0, 0)
+  const insertImageMarkdown = useCallback((normalizedPath, savedCursorPos) => {
+    const imageMarkdown = `![image](${normalizedPath})`
 
-          canvas.toBlob(
-            (blob) => {
-              if (blob) {
-                resolve(blob)
-              } else {
-                reject(new Error('Failed to convert to WebP'))
-              }
-            },
-            'image/webp',
-            0.9
-          )
-        }
-        img.src = event.target.result
-      }
-      reader.readAsDataURL(file)
-    })
-  }
-
-  // Helper function to convert blob to data URL
-  const blobToDataURL = (blob) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onerror = () => reject(new Error('Failed to read blob'))
-      reader.onload = () => resolve(reader.result)
-      reader.readAsDataURL(blob)
-    })
-  }
-
-  // Check if running in Electron desktop
-  const isDesktop = window.electronAPI?.isElectron === true
-
-  // Helper function to save file - Desktop version saves directly, browser version uses download
-  const saveImageFile = async (blob, imageName) => {
-    if (isDesktop) {
-      try {
-        const arrayBuffer = await blob.arrayBuffer()
-        const uint8Array = new Uint8Array(arrayBuffer)
-        const result = await window.electronAPI.saveImage({
-          imageData: Array.from(uint8Array),
-          fileName: imageName
-        })
-        if (result.success) {
-          return result.path
-        }
-        return null
-      } catch (err) {
-        console.error('Failed to save image via Electron:', err)
-        return null
-      }
+    if (savedCursorPos >= 0 && editorRef.current?.insertAtPos) {
+      editorRef.current.insertAtPos(imageMarkdown, savedCursorPos)
+      return
     }
 
-    if (window.showSaveFilePicker) {
-      try {
-        const handle = await window.showSaveFilePicker({
-          suggestedName: imageName,
-          types: [{
-            description: 'WebP Image',
-            accept: { 'image/webp': ['.webp'] }
-          }]
-        })
-        const writable = await handle.createWritable()
-        await writable.write(blob)
-        await writable.close()
-        return imageName
-      } catch (err) {
-        if (err.name === 'AbortError') {
-          return null
-        }
-      }
+    if (editorRef.current?.insertAtCursor) {
+      editorRef.current.insertAtCursor(imageMarkdown)
+      return
     }
 
-    // Download fallback
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = imageName
-    a.click()
-    URL.revokeObjectURL(url)
-    return imageName
-  }
+    setContent(`${state.content}\n${imageMarkdown}`)
+  }, [state.content, setContent])
 
   const handleClipboardImage = useCallback(async (file) => {
     try {
-      const timestamp = Date.now()
-      const imageName = `image_${timestamp}.webp`
+      // Save cursor position before opening dialog
+      const savedCursorPos = editorRef.current?.getCursorPos?.() ?? -1
 
-      // Convert to WebP
+      const imageName = `image_${Date.now()}.webp`
+
       const blob = await convertToWebP(file)
-      
-      // Convert to data URL for preview
       const dataUrl = await blobToDataURL(blob)
-
-      // Save file and get the path - user will choose location
       const savedPath = await saveImageFile(blob, imageName)
-      
+
       // If user cancelled or save failed, don't insert
-      if (!savedPath) {
-        return
-      }
+      if (!savedPath) return
 
       // Normalize path to use forward slashes for consistency
       const normalizedPath = savedPath.replace(/\\/g, '/')
+      setImageMap(prev => ({ ...prev, [normalizedPath]: dataUrl }))
 
-      // Store in image map for preview (use normalized path as key)
-      setImageMap(prev => ({
-        ...prev,
-        [normalizedPath]: dataUrl
-      }))
-
-      // Insert markdown image reference with normalized path
-      const imageMarkdown = `![image](${normalizedPath})`
-      setContent(prev => prev + '\n' + imageMarkdown)
+      insertImageMarkdown(normalizedPath, savedCursorPos)
     } catch (err) {
       console.error('Failed to process clipboard image:', err)
     }
-  }, [setContent, setImageMap])
+  }, [setImageMap, insertImageMarkdown])
+
+  const handleSelectLocalImage = useCallback(async () => {
+    try {
+      const savedCursorPos = editorRef.current?.getCursorPos?.() ?? -1
+
+      const result = await openLocalImage()
+      if (!result) return
+
+      const { path: imagePath, name, file } = result
+      const normalizedPath = imagePath.replace(/\\/g, '/')
+
+      // If we have a file object (browser mode), convert for preview
+      if (file) {
+        const blob = await convertToWebP(file)
+        const dataUrl = await blobToDataURL(blob)
+        setImageMap(prev => ({
+          ...prev,
+          [normalizedPath]: dataUrl,
+          [name]: dataUrl
+        }))
+      }
+
+      insertImageMarkdown(normalizedPath, savedCursorPos)
+    } catch (err) {
+      console.error('Failed to select local image:', err)
+    }
+  }, [setImageMap, insertImageMarkdown])
 
   // Sync scroll between editor and preview
   const handleEditorScroll = useCallback((scrollInfo) => {
-    if (previewRef.current) {
-      const scrollPercent = scrollInfo.scrollTop / (scrollInfo.scrollHeight - scrollInfo.clientHeight)
-      const previewScrollTop = scrollPercent * (previewRef.current.scrollHeight - previewRef.current.clientHeight)
-      previewRef.current.scrollTop = previewScrollTop
-    }
+    const preview = previewRef.current
+    if (!preview) return
+    const maxSource = scrollInfo.scrollHeight - scrollInfo.clientHeight
+    const maxTarget = preview.scrollHeight - preview.clientHeight
+    if (maxSource <= 0 || maxTarget <= 0) return
+    preview.scrollTop = (scrollInfo.scrollTop / maxSource) * maxTarget
   }, [])
 
   // Clipboard paste image handling
@@ -418,86 +427,172 @@ photos: []
     return () => window.removeEventListener('paste', handlePaste)
   }, [handleClipboardImage])
 
-  const handleContentChange = useCallback((newContent) => {
-    setContent(newContent)
-    // Update files array when content changes
-    setFiles(prevFiles => {
-      return prevFiles.map(file => {
-        if (file.path === currentFilePath) {
-          return {
-            ...file,
-            content: newContent,
-            savedContent: savedContent,
-            isModified: newContent !== savedContent,
-            fileHandle: fileHandle
-          }
-        }
-        return file
-      })
-    })
-  }, [setContent, currentFilePath, savedContent, fileHandle])
-
   const handleCursorChange = useCallback((line, column) => {
     setCursorPos({ line, column })
   }, [])
 
+  const handleSaveFile = useCallback(async () => {
+    const saved = await saveActiveFile()
+    if (!saved) await saveActiveFileAs()
+  }, [saveActiveFile, saveActiveFileAs])
+
+  const handleSaveAsFile = useCallback(() => saveActiveFileAs(), [saveActiveFileAs])
+
   const handleNewFile = useCallback(() => {
     if (!checkUnsaved()) return
-    
-    const newFileName = 'untitled.md'
-    const newFile = {
-      path: newFileName,
-      name: newFileName,
-      content: DEFAULT_CONTENT,
-      savedContent: DEFAULT_CONTENT,
-      isModified: false,
-      fileHandle: null
+    upsertFile(makeDefaultFileForNew())
+  }, [checkUnsaved, upsertFile])
+
+  const handleNewFileWithManager = useCallback(() => {
+    if (!checkUnsaved()) return
+    const newFileName = `untitled-${Date.now()}.md`
+    upsertFile(makeDefaultFileForNew(newFileName))
+  }, [checkUnsaved, upsertFile])
+
+  const handleApplyTemplate = useCallback((template) => {
+    const yamlContent = template.content
+      .replace(/\{\{title\}\}/g, fileName.replace('.md', ''))
+      .replace(/\{\{date\}\}/g, new Date().toISOString().split('T')[0])
+      .replace(/\{\{time\}\}/g, Date.now().toString())
+      .replace(/\{\{datetime\}\}/g, new Date().toLocaleString())
+      .replace(/\{\{image\}\}/g, '')
+      .replace(/\{\{category\}\}/g, '')
+      .replace(/\{\{tags\}\}/g, '[]')
+
+    const { hasYAML } = extractYAML(content)
+    setContent(hasYAML ? replaceYAML(content, yamlContent) : `${yamlContent}\n\n${content}`)
+    setShowYAMLModal(false)
+  }, [content, fileName, setContent])
+
+  const handleConfigSave = useCallback((newConfig) => {
+    setConfig(newConfig)
+  }, [setConfig])
+
+  // Load file content on demand (folder files are lazy)
+  const loadFileContent = useCallback(async (file) => {
+    if (isDesktop && typeof file.fileHandle === 'string') {
+      const result = await window.electronAPI.readFile({ filePath: file.fileHandle })
+      if (result.success) return result.content
+      throw new Error(result.error || 'Failed to read file')
     }
-    
-    setFiles(prevFiles => {
-      const existingIndex = prevFiles.findIndex(f => f.path === newFileName)
-      if (existingIndex >= 0) {
-        return prevFiles.map((f, i) => i === existingIndex ? newFile : f)
+    if (file.fileHandle?.getFile) {
+      const f = await file.fileHandle.getFile()
+      return await f.text()
+    }
+    return file.content
+  }, [])
+
+  const handleFileSelect = useCallback(async (filePath) => {
+    const file = state.files.find(f => f.path === filePath)
+    if (!file || file.path === state.currentPath) return
+    if (!checkUnsaved()) return
+
+    if (file.loaded) {
+      activateFile(filePath)
+      return
+    }
+
+    try {
+      const text = await loadFileContent(file)
+      upsertFile({ ...file, content: text, savedContent: text, isModified: false, loaded: true })
+    } catch (err) {
+      console.error('Failed to load file:', filePath, err)
+    }
+  }, [state.files, state.currentPath, checkUnsaved, activateFile, upsertFile, loadFileContent])
+
+  const refreshFolderTree = useCallback(async () => {
+    if (!isDesktop || !currentFolderPath) return
+    try {
+      const result = await window.electronAPI.readDirectory({ dirPath: currentFolderPath })
+      if (result.success) {
+        setFolderTree(absolutizeTree(result.entries, currentFolderPath))
       }
-      return [...prevFiles, newFile]
-    })
-    
-    setContent(DEFAULT_CONTENT)
-    setFileName(newFileName)
-    setSavedContent(DEFAULT_CONTENT)
-    setFileHandle(null)
-    setCurrentFilePath(newFileName)
-  }, [checkUnsaved, setContent, setFileName, setSavedContent, setFileHandle])
+    } catch (err) {
+      console.error('Failed to refresh folder tree:', err)
+    }
+  }, [currentFolderPath])
+
+  const isDiskFile = useCallback((file) => {
+    return isDesktop && typeof file?.fileHandle === 'string' && file.path === file.fileHandle
+  }, [])
+
+  const handleFileRename = useCallback(async (oldPath, newName) => {
+    const file = state.files.find(f => f.path === oldPath)
+    if (!file) return
+
+    if (isDiskFile(file)) {
+      const lastSlash = Math.max(oldPath.lastIndexOf('/'), oldPath.lastIndexOf('\\'))
+      const newPath = oldPath.slice(0, lastSlash + 1) + newName
+      try {
+        await window.electronAPI.renameFile({ oldPath, newPath })
+      } catch (err) {
+        alert(t('renameFailed', lang).replace('{message}', err.message))
+        return
+      }
+      renameFile(oldPath, newName, newPath)
+      refreshFolderTree()
+      return
+    }
+
+    renameFile(oldPath, newName)
+  }, [state.files, isDiskFile, renameFile, refreshFolderTree, lang])
+
+  const handleFileDelete = useCallback(async (filePath) => {
+    if (!window.confirm(t('deleteFileConfirm', lang))) return
+
+    const file = state.files.find(f => f.path === filePath)
+    if (isDiskFile(file)) {
+      try {
+        await window.electronAPI.deleteFile({ filePath })
+      } catch (err) {
+        alert(t('deleteFailed', lang).replace('{message}', err.message))
+        return
+      }
+    }
+
+    removeFile(filePath)
+    if (isDiskFile(file)) refreshFolderTree()
+  }, [state.files, isDiskFile, removeFile, refreshFolderTree, lang])
+
+  // Close a file, saving ITS OWN content (not the active document) when asked
+  const handleFileClose = useCallback(async (filePath) => {
+    const file = state.files.find(f => f.path === filePath)
+    if (!file) return
+
+    if (file.isModified) {
+      const message = t('closeUnsavedConfirm', lang).replace('{name}', file.name)
+      if (window.confirm(message)) {
+        const saved = await saveFileToDisk(file)
+        if (!saved && file.path === state.currentPath) {
+          // No existing handle for the active document — fall back to Save As
+          await saveActiveFileAs()
+        }
+      }
+    }
+
+    removeFile(filePath)
+  }, [state.files, state.currentPath, lang, saveFileToDisk, saveActiveFileAs, removeFile])
 
   const handleOpenFile = useCallback(async () => {
     if (!checkUnsaved()) return
-    
+
+    const addOpenedFile = (path, name, text, handle) => {
+      upsertFile({
+        path,
+        name,
+        content: text,
+        savedContent: text,
+        isModified: false,
+        fileHandle: handle,
+        loaded: true
+      })
+    }
+
     try {
       if (isDesktop) {
         const result = await window.electronAPI.openFileDialog()
         if (result.success) {
-          const newFile = {
-            path: result.filePath,
-            name: result.fileName,
-            content: result.content,
-            savedContent: result.content,
-            isModified: false,
-            fileHandle: null
-          }
-          
-          setFiles(prevFiles => {
-            const existingIndex = prevFiles.findIndex(f => f.path === result.filePath)
-            if (existingIndex >= 0) {
-              return prevFiles.map((f, i) => i === existingIndex ? newFile : f)
-            }
-            return [...prevFiles, newFile]
-          })
-          
-          setContent(result.content)
-          setFileName(result.fileName)
-          setSavedContent(result.content)
-          setFileHandle(result.filePath)
-          setCurrentFilePath(result.filePath)
+          addOpenedFile(result.filePath, result.fileName, result.content, result.filePath)
         }
       } else if (window.showOpenFilePicker) {
         const [handle] = await window.showOpenFilePicker({
@@ -508,28 +603,7 @@ photos: []
         })
         const file = await handle.getFile()
         const text = await file.text()
-        const newFile = {
-          path: file.name,
-          name: file.name,
-          content: text,
-          savedContent: text,
-          isModified: false,
-          fileHandle: handle
-        }
-        
-        setFiles(prevFiles => {
-          const existingIndex = prevFiles.findIndex(f => f.path === file.name)
-          if (existingIndex >= 0) {
-            return prevFiles.map((f, i) => i === existingIndex ? newFile : f)
-          }
-          return [...prevFiles, newFile]
-        })
-        
-        setContent(text)
-        setFileName(file.name)
-        setSavedContent(text)
-        setFileHandle(handle)
-        setCurrentFilePath(file.name)
+        addOpenedFile(file.name, file.name, text, handle)
       } else {
         const input = document.createElement('input')
         input.type = 'file'
@@ -538,28 +612,7 @@ photos: []
           const file = e.target.files[0]
           if (file) {
             const text = await file.text()
-            const newFile = {
-              path: file.name,
-              name: file.name,
-              content: text,
-              savedContent: text,
-              isModified: false,
-              fileHandle: null
-            }
-            
-            setFiles(prevFiles => {
-              const existingIndex = prevFiles.findIndex(f => f.path === file.name)
-              if (existingIndex >= 0) {
-                return prevFiles.map((f, i) => i === existingIndex ? newFile : f)
-              }
-              return [...prevFiles, newFile]
-            })
-            
-            setContent(text)
-            setFileName(file.name)
-            setSavedContent(text)
-            setFileHandle(null)
-            setCurrentFilePath(file.name)
+            addOpenedFile(file.name, file.name, text, null)
           }
         }
         input.click()
@@ -569,137 +622,102 @@ photos: []
         console.error('Failed to open file:', err)
       }
     }
-  }, [checkUnsaved, setContent, setFileName, setSavedContent, setFileHandle])
+  }, [checkUnsaved, upsertFile])
 
-  const handleSaveFile = useCallback(async () => {
-    try {
-      if (isDesktop) {
-        // In desktop mode, if we have a file path, save directly
-        if (fileHandle && typeof fileHandle === 'string') {
-          const result = await window.electronAPI.saveFile({
-            filePath: fileHandle,
-            content
-          })
-          if (result.success) {
-            setSavedContent(content)
-          }
-          return
+  // Recursively build directory tree (browser File System Access API, lazy)
+  const readDirectory = useCallback(async (dirHandle, path = '') => {
+    const entries = {}
+
+    for await (const entry of dirHandle.values()) {
+      const entryPath = path ? `${path}/${entry.name}` : entry.name
+
+      if (entry.kind === 'directory') {
+        const subEntries = await readDirectory(entry, entryPath)
+        entries[entry.name] = {
+          name: entry.name,
+          path: entryPath,
+          isFolder: true,
+          children: subEntries,
+          handle: entry
         }
-        
-        // Otherwise show save dialog
-        const result = await window.electronAPI.saveFileDialog({
-          defaultName: fileName
-        })
-        if (result.success) {
-          const saveResult = await window.electronAPI.saveFile({
-            filePath: result.filePath,
-            content
-          })
-          if (saveResult.success) {
-            setSavedContent(content)
-            setFileHandle(result.filePath)
-            setFileName(result.filePath.split(/[\\/]/).pop())
-          }
+      } else if (/\.(md|markdown)$/i.test(entry.name)) {
+        entries[entry.name] = {
+          name: entry.name,
+          path: entryPath,
+          isFolder: false,
+          handle: entry
         }
-        return
-      }
-      
-      // Browser mode
-      // If we have a file handle, write directly to it
-      if (fileHandle) {
-        const writable = await fileHandle.createWritable()
-        await writable.write(content)
-        await writable.close()
-        setSavedContent(content)
-        return
-      }
-      
-      // Otherwise, use File System Access API to pick save location
-      if (window.showSaveFilePicker) {
-        const handle = await window.showSaveFilePicker({
-          suggestedName: fileName,
-          types: [{
-            description: 'Markdown Files',
-            accept: { 'text/markdown': ['.md'] }
-          }]
-        })
-        const writable = await handle.createWritable()
-        await writable.write(content)
-        await writable.close()
-        setSavedContent(content)
-        setFileHandle(handle)
-        setFileName(handle.name)
-      } else {
-        // Fallback: download file
-        const blob = new Blob([content], { type: 'text/markdown' })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = fileName
-        a.click()
-        URL.revokeObjectURL(url)
-        setSavedContent(content)
-      }
-    } catch (err) {
-      if (err.name !== 'AbortError') {
-        console.error('Failed to save file:', err)
       }
     }
-  }, [content, fileName, fileHandle, setSavedContent, setFileHandle, setFileName])
 
-  const handleSaveAsFile = useCallback(async () => {
+    return entries
+  }, [])
+
+  const handleOpenFolder = useCallback(async () => {
+    if (!checkUnsaved()) return
+
     try {
       if (isDesktop) {
-        const result = await window.electronAPI.saveFileDialog({
-          defaultName: fileName
-        })
+        setIsLoading(true)
+        const result = await window.electronAPI.openFolderDialog()
+
         if (result.success) {
-          const saveResult = await window.electronAPI.saveFile({
-            filePath: result.filePath,
-            content
+          const dirResult = await window.electronAPI.readDirectory({
+            dirPath: result.folderPath
           })
-          if (saveResult.success) {
-            setSavedContent(content)
-            setFileHandle(result.filePath)
-            setFileName(result.filePath.split(/[\\/]/).pop())
+
+          if (dirResult.success) {
+            setCurrentFolderPath(result.folderPath)
+            const tree = absolutizeTree(dirResult.entries, result.folderPath)
+            setFolderTree(tree)
+
+            const allFiles = collectFilesFromTree(tree)
+            replaceFiles(allFiles, false)
+
+            if (allFiles.length > 0) {
+              const first = allFiles[0]
+              const text = await loadFileContent(first)
+              upsertFile({ ...first, content: text, savedContent: text, loaded: true })
+            } else {
+              replaceFiles([], true)
+            }
           }
         }
         return
       }
-      
-      if (window.showSaveFilePicker) {
-        const handle = await window.showSaveFilePicker({
-          suggestedName: fileName,
-          types: [{
-            description: 'Markdown Files',
-            accept: { 'text/markdown': ['.md'] }
-          }]
-        })
-        const writable = await handle.createWritable()
-        await writable.write(content)
-        await writable.close()
-        setSavedContent(content)
-        setFileHandle(handle)
-        setFileName(handle.name)
+
+      if (window.showDirectoryPicker) {
+        setIsLoading(true)
+        const handle = await window.showDirectoryPicker()
+
+        const tree = await readDirectory(handle)
+        setFolderTree(tree)
+        setCurrentFolderPath('')
+
+        const allFiles = collectFilesFromTree(tree, { handleFromNode: true })
+        replaceFiles(allFiles, false)
+
+        if (allFiles.length > 0) {
+          const first = allFiles[0]
+          const text = await loadFileContent(first)
+          upsertFile({ ...first, content: text, savedContent: text, loaded: true })
+        } else {
+          replaceFiles([], true)
+        }
       } else {
-        // Fallback: download file
-        const blob = new Blob([content], { type: 'text/markdown' })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = fileName
-        a.click()
-        URL.revokeObjectURL(url)
-        setSavedContent(content)
+        alert(t('openFolderUnsupported', lang))
       }
     } catch (err) {
-      if (err.name !== 'AbortError') {
-        console.error('Failed to save file:', err)
+      if (err.name && err.name !== 'AbortError') {
+        console.error('Failed to open folder:', err)
+        alert(t('folderOpenFailed', lang).replace('{message}', err.message))
       }
+    } finally {
+      setIsLoading(false)
     }
-  }, [content, fileName, setSavedContent, setFileHandle, setFileName])
+  }, [checkUnsaved, readDirectory, loadFileContent, lang, replaceFiles, upsertFile])
 
-  // Keyboard shortcuts (must be after function definitions)
+  // Keyboard shortcuts (must be after all handler definitions)
   useEffect(() => {
     const handleKeyDown = (e) => {
       const isCtrl = e.ctrlKey || e.metaKey
@@ -730,282 +748,9 @@ photos: []
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [handleSaveFile, handleSaveAsFile, handleNewFile, handleOpenFile])
 
-  const handleApplyTemplate = useCallback((template) => {
-    const yamlContent = template.content
-      .replace(/\{\{title\}\}/g, fileName.replace('.md', ''))
-      .replace(/\{\{date\}\}/g, new Date().toISOString().split('T')[0])
-      .replace(/\{\{time\}\}/g, Date.now().toString())
-      .replace(/\{\{datetime\}\}/g, new Date().toLocaleString())
-      .replace(/\{\{image\}\}/g, '')
-      .replace(/\{\{category\}\}/g, '')
-      .replace(/\{\{tags\}\}/g, '[]')
-
-    const { hasYAML } = extractYAML(content)
-    const newContent = hasYAML ? replaceYAML(content, yamlContent) : `${yamlContent}\n\n${content}`
-    setContent(newContent)
-    setShowYAMLModal(false)
-  }, [content, fileName, setContent])
-
-  const handleConfigSave = useCallback((newConfig) => {
-    setConfig(newConfig)
-  }, [setConfig])
-
-  // File manager handlers
-  const handleFileSelect = useCallback((filePath) => {
-    if (!checkUnsaved()) return
-    
-    const file = files.find(f => f.path === filePath)
-    if (file) {
-      setContent(file.content)
-      setSavedContent(file.savedContent)
-      setFileName(file.name)
-      setCurrentFilePath(file.path)
-      setFileHandle(file.fileHandle)
-    }
-  }, [files, checkUnsaved, setContent, setSavedContent, setFileName])
-
-  const handleFileRename = useCallback((oldPath, newName) => {
-    setFiles(prevFiles => {
-      return prevFiles.map(file => {
-        if (file.path === oldPath) {
-          const newPath = newName
-          return {
-            ...file,
-            path: newPath,
-            name: newName
-          }
-        }
-        return file
-      })
-    })
-    
-    if (currentFilePath === oldPath) {
-      setFileName(newName)
-      setCurrentFilePath(newName)
-    }
-  }, [currentFilePath, setFileName])
-
-  const handleFileDelete = useCallback((filePath) => {
-    const lang = config.language
-    const message = lang === 'zh-CN' 
-      ? '确定要删除这个文件吗？' 
-      : 'Are you sure you want to delete this file?'
-    
-    if (!window.confirm(message)) return
-    
-    setFiles(prevFiles => {
-      const newFiles = prevFiles.filter(f => f.path !== filePath)
-      
-      if (newFiles.length === 0) {
-        const defaultFile = {
-          path: 'untitled.md',
-          name: 'untitled.md',
-          content: DEFAULT_CONTENT,
-          savedContent: DEFAULT_CONTENT,
-          isModified: false,
-          fileHandle: null
-        }
-        setContent(DEFAULT_CONTENT)
-        setSavedContent(DEFAULT_CONTENT)
-        setFileName('untitled.md')
-        setCurrentFilePath('untitled.md')
-        setFileHandle(null)
-        return [defaultFile]
-      }
-      
-      if (currentFilePath === filePath) {
-        const nextFile = newFiles[0]
-        setContent(nextFile.content)
-        setSavedContent(nextFile.savedContent)
-        setFileName(nextFile.name)
-        setCurrentFilePath(nextFile.path)
-        setFileHandle(nextFile.fileHandle)
-      }
-      
-      return newFiles
-    })
-  }, [currentFilePath, config.language, setContent, setSavedContent, setFileName])
-
-  const handleNewFileWithManager = useCallback(() => {
-    if (!checkUnsaved()) return
-    
-    const newFileName = `untitled-${Date.now()}.md`
-    const newFile = {
-      path: newFileName,
-      name: newFileName,
-      content: DEFAULT_CONTENT,
-      savedContent: DEFAULT_CONTENT,
-      isModified: false,
-      fileHandle: null
-    }
-    
-    setFiles(prevFiles => [...prevFiles, newFile])
-    setContent(DEFAULT_CONTENT)
-    setSavedContent(DEFAULT_CONTENT)
-    setFileName(newFileName)
-    setCurrentFilePath(newFileName)
-    setFileHandle(null)
-  }, [checkUnsaved, setContent, setSavedContent, setFileName])
-
-  // Recursively read directory contents
-  const readDirectory = useCallback(async (dirHandle, path = '') => {
-    const entries = {}
-    
-    for await (const entry of dirHandle.values()) {
-      const entryPath = path ? `${path}/${entry.name}` : entry.name
-      
-      if (entry.kind === 'directory') {
-        const subEntries = await readDirectory(entry, entryPath)
-        entries[entry.name] = {
-          name: entry.name,
-          path: entryPath,
-          isFolder: true,
-          children: subEntries,
-          handle: entry
-        }
-      } else if (entry.name.endsWith('.md') || entry.name.endsWith('.markdown')) {
-        try {
-          const file = await entry.getFile()
-          const text = await file.text()
-          entries[entry.name] = {
-            name: entry.name,
-            path: entryPath,
-            isFolder: false,
-            content: text,
-            savedContent: text,
-            isModified: false,
-            handle: entry
-          }
-        } catch (err) {
-          console.error('Failed to read file:', entry.name, err)
-        }
-      }
-    }
-    
-    return entries
-  }, [])
-
-  const handleOpenFolder = useCallback(async () => {
-    if (!checkUnsaved()) return
-    
-    try {
-      if (isDesktop) {
-        setIsLoading(true)
-        const result = await window.electronAPI.openFolderDialog()
-        
-        if (result.success) {
-          const dirResult = await window.electronAPI.readDirectory({
-            dirPath: result.folderPath
-          })
-          
-          if (dirResult.success) {
-            setFolderTree(dirResult.entries)
-            
-            // Collect all markdown files from tree
-            const allFiles = []
-            const flattenTree = (nodes) => {
-              Object.values(nodes).forEach(node => {
-                if (node.isFolder && node.children) {
-                  flattenTree(node.children)
-                } else if (!node.isFolder && node.content !== undefined) {
-                  allFiles.push({
-                    path: `${result.folderPath}/${node.path}`,
-                    name: node.name,
-                    content: node.content,
-                    savedContent: node.savedContent,
-                    isModified: false,
-                    fileHandle: null
-                  })
-                }
-              })
-            }
-            flattenTree(dirResult.entries)
-            
-            if (allFiles.length > 0) {
-              setFiles(allFiles)
-              const firstFile = allFiles[0]
-              setContent(firstFile.content)
-              setSavedContent(firstFile.savedContent)
-              setFileName(firstFile.name)
-              setCurrentFilePath(firstFile.path)
-              setFileHandle(null)
-            } else {
-              setFiles([])
-              setContent('')
-              setSavedContent('')
-              setFileName('untitled.md')
-              setCurrentFilePath('')
-              setFileHandle(null)
-            }
-          }
-        }
-        setIsLoading(false)
-        return
-      }
-      
-      if (window.showDirectoryPicker) {
-        setIsLoading(true)
-        const handle = await window.showDirectoryPicker()
-        
-        const tree = await readDirectory(handle)
-        setFolderTree(tree)
-        
-        // Collect all markdown files from tree
-        const allFiles = []
-        const flattenTree = (nodes) => {
-          Object.values(nodes).forEach(node => {
-            if (node.isFolder && node.children) {
-              flattenTree(node.children)
-            } else if (!node.isFolder && node.content !== undefined) {
-              allFiles.push({
-                path: node.path,
-                name: node.name,
-                content: node.content,
-                savedContent: node.savedContent,
-                isModified: false,
-                fileHandle: node.handle
-              })
-            }
-          })
-        }
-        flattenTree(tree)
-        
-        if (allFiles.length > 0) {
-          setFiles(allFiles)
-          const firstFile = allFiles[0]
-          setContent(firstFile.content)
-          setSavedContent(firstFile.savedContent)
-          setFileName(firstFile.name)
-          setCurrentFilePath(firstFile.path)
-          setFileHandle(firstFile.fileHandle)
-        } else {
-          setFiles([])
-          setContent('')
-          setSavedContent('')
-          setFileName('untitled.md')
-          setCurrentFilePath('')
-          setFileHandle(null)
-        }
-        setIsLoading(false)
-      } else {
-        // Fallback for browsers without File System Access API
-        alert(config.language === 'zh-CN' 
-          ? '您的浏览器不支持打开文件夹功能。请使用 Chrome, Edge 或其他支持 File System Access API 的浏览器。' 
-          : 'Your browser does not support opening folders. Please use Chrome, Edge or other browsers with File System Access API.')
-      }
-    } catch (err) {
-      setIsLoading(false)
-      if (err.name && err.name !== 'AbortError') {
-        console.error('Failed to open folder:', err)
-        alert(config.language === 'zh-CN' 
-          ? '打开文件夹失败: ' + err.message 
-          : 'Failed to open folder: ' + err.message)
-      }
-    }
-  }, [checkUnsaved, readDirectory, config.language, setContent, setSavedContent, setFileName])
-
   return (
     <div className={`app ${config.theme}`}>
+      <HljsTheme theme={config.theme} />
       <Toolbar
         onNew={handleNewFile}
         onOpen={handleOpenFile}
@@ -1024,12 +769,13 @@ photos: []
       <main className="main-content" ref={containerRef}>
         <div className="panel file-manager-panel" style={{ width: fileManagerCollapsed ? '32px' : `${panelSizes[0]}%` }}>
           <FileManager
-            files={files}
-            currentFile={currentFilePath}
+            files={state.files}
+            currentFile={state.currentPath}
             isModified={isModified}
             onFileSelect={handleFileSelect}
             onFileRename={handleFileRename}
             onFileDelete={handleFileDelete}
+            onFileClose={handleFileClose}
             onNewFile={handleNewFileWithManager}
             onOpenFile={handleOpenFile}
             onOpenFolder={handleOpenFolder}
@@ -1044,21 +790,22 @@ photos: []
             </div>
           )}
         </div>
-        
+
         <div className="panel" style={{ width: fileManagerCollapsed ? `${panelSizes[0] + panelSizes[1]}%` : `${panelSizes[1]}%` }}>
           <div className="panel-header">
-            {config.language === 'zh-CN' ? '源码' : 'Source'}
+            {t('sourcePanel', config.language)}
           </div>
           <QuickEdit
             editorRef={editorRef}
             content={content}
-            onChange={handleContentChange}
+            onChange={setContent}
+            onSelectLocalImage={handleSelectLocalImage}
           />
           <div className="panel-content">
             <Editor
               ref={editorRef}
               value={content}
-              onChange={handleContentChange}
+              onChange={setContent}
               onCursorChange={handleCursorChange}
               onScroll={handleEditorScroll}
               theme={config.theme}
@@ -1068,28 +815,30 @@ photos: []
             <div className="resize-handle-bar" />
           </div>
         </div>
-        
+
         <div className="panel" style={{ width: `${panelSizes[2]}%` }}>
           <div className="panel-header">
-            {config.language === 'zh-CN' ? '预览' : 'Preview'}
+            {t('previewPanel', config.language)}
           </div>
           <div className="panel-content" ref={previewRef}>
-            <Preview 
-              content={content} 
-              theme={config.theme} 
-              imageMap={imageMap} 
+            <Preview
+              content={content}
+              theme={config.theme}
+              imageMap={imageMap}
               currentStyle={currentStyle}
               customStyles={customStyles}
+              currentFilePath={state.currentPath}
+              currentFolderPath={currentFolderPath}
             />
           </div>
           <div className="resize-handle" onMouseDown={(e) => handleMouseDown(2, e)}>
             <div className="resize-handle-bar" />
           </div>
         </div>
-        
+
         <div className="panel" style={{ width: `${panelSizes[3]}%` }}>
           <div className="panel-header">
-            {config.language === 'zh-CN' ? '翻译' : 'Translation'}
+            {t('translationPanel', config.language)}
           </div>
           <Translation
             content={content}
@@ -1143,6 +892,19 @@ photos: []
       )}
     </div>
   )
+}
+
+// New file factories (kept outside App to avoid re-creation per render)
+function makeDefaultFileForNew(name = 'untitled.md') {
+  return {
+    path: name,
+    name,
+    content: DEFAULT_CONTENT,
+    savedContent: DEFAULT_CONTENT,
+    isModified: false,
+    fileHandle: null,
+    loaded: true
+  }
 }
 
 export default App

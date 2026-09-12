@@ -3,6 +3,8 @@ import { picgoService } from '../../services/imageUpload/picgo'
 import { t } from '../../utils/i18n'
 import './ImageUpload.css'
 
+const isDesktop = window.electronAPI?.isElectron === true
+
 function ImageUpload({ onClose, lang, content, onContentChange, picgoConfig }) {
   const [isUploading, setIsUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState([])
@@ -25,6 +27,30 @@ function ImageUpload({ onClose, lang, content, onContentChange, picgoConfig }) {
     picgoService.updateConfig(config)
   }, [config])
 
+  // Read local image file (desktop version uses electron API)
+  const readLocalImage = useCallback(async (imagePath) => {
+    if (isDesktop) {
+      const result = await window.electronAPI.readImage({ filePath: imagePath })
+      if (result.success) {
+        const byteString = atob(result.data)
+        const ab = new ArrayBuffer(byteString.length)
+        const ia = new Uint8Array(ab)
+        for (let i = 0; i < byteString.length; i++) {
+          ia[i] = byteString.charCodeAt(i)
+        }
+        const blob = new Blob([ab], { type: result.mimeType })
+        return blob
+      }
+      throw new Error(result.error || 'Failed to read image')
+    } else {
+      const response = await fetch(imagePath)
+      if (!response.ok) {
+        throw new Error('Failed to fetch image')
+      }
+      return await response.blob()
+    }
+  }, [])
+
   // Batch upload - find all local images and upload to PicGo
   const handleBatchUpload = useCallback(async () => {
     if (!content) return
@@ -41,7 +67,7 @@ function ImageUpload({ onClose, lang, content, onContentChange, picgoConfig }) {
 
     while ((match = imageRegex.exec(content)) !== null) {
       const [fullMatch, alt, url] = match
-      // Only process local file paths (not URLs)
+      // Only process local file paths (not URLs or data URLs)
       if (!url.startsWith('http') && !url.startsWith('data:')) {
         matches.push({
           fullMatch,
@@ -66,24 +92,19 @@ function ImageUpload({ onClose, lang, content, onContentChange, picgoConfig }) {
 
     for (const img of matches) {
       setUploadProgress(prev => [...prev, {
-        name: img.url,
+        name: img.url.split('/').pop(),
         status: 'uploading'
       }])
 
       try {
-        // Try to fetch the image (for local files served by dev server)
-        const response = await fetch(img.url)
-        if (!response.ok) {
-          throw new Error('Failed to fetch image')
-        }
-
-        const blob = await response.blob()
-        const file = new File([blob], img.url.split('/').pop(), { type: blob.type })
+        const blob = await readLocalImage(img.url)
+        const fileName = img.url.split('/').pop() || 'image.png'
+        const file = new File([blob], fileName, { type: blob.type })
 
         const result = await picgoService.upload(file)
 
         setUploadProgress(prev => prev.map(item =>
-          item.name === img.url
+          item.name === img.url.split('/').pop()
             ? { ...item, status: result.success ? 'success' : 'error', url: result.url, error: result.error }
             : item
         ))
@@ -99,7 +120,7 @@ function ImageUpload({ onClose, lang, content, onContentChange, picgoConfig }) {
         }
       } catch (err) {
         setUploadProgress(prev => prev.map(item =>
-          item.name === img.url
+          item.name === img.url.split('/').pop()
             ? { ...item, status: 'error', error: err.message }
             : item
         ))
@@ -112,7 +133,7 @@ function ImageUpload({ onClose, lang, content, onContentChange, picgoConfig }) {
     }
 
     setIsUploading(false)
-  }, [content, config, onContentChange, lang])
+  }, [content, config, onContentChange, lang, readLocalImage])
 
   return (
     <div className="image-upload-overlay" onClick={onClose}>

@@ -311,6 +311,7 @@ function SettingsModal({ config, onSave, onClose, lang }) {
                 placeholder="sk-..."
                 className="setting-input"
               />
+              <p className="setting-hint">{t('storageWarning', lang)}</p>
             </div>
             <div className="setting-row">
               <label>{t('apiUrl', lang)}</label>

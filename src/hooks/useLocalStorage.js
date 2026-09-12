@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react'
 
-export function useLocalStorage(key, initialValue) {
+// options.debounce: defer writes to localStorage by N ms (for large values
+// that would otherwise be serialized on every keystroke)
+export function useLocalStorage(key, initialValue, options = {}) {
+  const { debounce = 0 } = options
+
   const [storedValue, setStoredValue] = useState(() => {
     try {
       const item = window.localStorage.getItem(key)
@@ -12,12 +16,20 @@ export function useLocalStorage(key, initialValue) {
   })
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(key, JSON.stringify(storedValue))
-    } catch (error) {
-      console.error('Error writing to localStorage:', error)
+    const write = () => {
+      try {
+        window.localStorage.setItem(key, JSON.stringify(storedValue))
+      } catch (error) {
+        console.error('Error writing to localStorage:', error)
+      }
     }
-  }, [key, storedValue])
+
+    if (debounce > 0) {
+      const timer = setTimeout(write, debounce)
+      return () => clearTimeout(timer)
+    }
+    write()
+  }, [key, storedValue, debounce])
 
   return [storedValue, setStoredValue]
 }
