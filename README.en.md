@@ -357,6 +357,6 @@ Issues and pull requests are welcome!
 <div align="center">
 
 Made with ❤️ by jack Cao
-Powered by OpenCode + MiMo V2 Pro
+Powered by Gemini 4 Neon
 
 </div>

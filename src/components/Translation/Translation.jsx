@@ -23,7 +23,7 @@ const LANGUAGES = [
   { code: 'de', nameKey: 'german' }
 ]
 
-function Translation({ content, lang, llmConfig }) {
+function Translation({ content, onTranslated, lang, llmConfig }) {
   const [translatedContent, setTranslatedContent] = useState('')
   const [engine, setEngine] = useState('google')
   const [targetLang, setTargetLang] = useState('zh-CN')
@@ -130,6 +130,14 @@ function Translation({ content, lang, llmConfig }) {
         >
           {isTranslating ? t('translating', lang) : t('translate', lang)}
         </button>
+        {translatedContent && onTranslated && (
+          <button
+            onClick={() => onTranslated(translatedContent)}
+            className="apply-btn"
+          >
+            {t('applyTranslation', lang)}
+          </button>
+        )}
       </div>
       {error && <div className="translation-error">{error}</div>}
       <div className="translation-output markdown-body">

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { t } from '../../utils/i18n'
 import './YAMLTemplateModal.css'
 
@@ -6,6 +6,33 @@ function YAMLTemplateModal({ templates, onApply, onSave, onClose, lang }) {
   const [editingTemplate, setEditingTemplate] = useState(null)
   const [newTemplateName, setNewTemplateName] = useState('')
   const [newTemplateContent, setNewTemplateContent] = useState('')
+  const fileInputRef = useRef(null)
+
+  const handleExportJSON = useCallback(() => {
+    const blob = new Blob([JSON.stringify(templates, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'tiny-md-yaml-templates.json'
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [templates])
+
+  const handleImportJSON = useCallback(async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      const parsed = JSON.parse(text)
+      if (Array.isArray(parsed)) {
+        const valid = parsed.filter((item) => item && item.id && item.name && item.content)
+        if (valid.length > 0) onSave(valid)
+      }
+    } catch (err) {
+      console.error('Failed to import YAML templates:', err)
+    }
+    e.target.value = ''
+  }, [onSave])
 
   const handleCreateTemplate = useCallback(() => {
     if (!newTemplateName.trim()) return
@@ -49,7 +76,14 @@ categories: []
 
         <div className="modal-body">
           <div className="templates-list">
-            <h3>{t('availableTemplates', lang)}</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <h3 style={{ margin: 0 }}>{t('availableTemplates', lang)}</h3>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button className="action-btn edit" onClick={handleExportJSON}>{t('exportTemplates', lang)}</button>
+                <button className="action-btn edit" onClick={() => fileInputRef.current?.click()}>{t('importTemplates', lang)}</button>
+                <input ref={fileInputRef} type="file" accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportJSON} />
+              </div>
+            </div>
             {templates.map(template => (
               <div key={template.id} className="template-item">
                 <div className="template-info">

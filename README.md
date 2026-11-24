@@ -16,7 +16,7 @@
 
 一款轻量级且灵活的 Markdown 编辑器，支持 Web 版和桌面版
 
-[功能特性](#-功能特性) • [下载安装](#-下载安装) • [快速开始](#-快速开始) • [使用指南](#-使用指南) • [快捷键](#️-快捷键)
+[功能特性](#-功能特性) • [下载安装](#-下载安装) • [快速开始](#-快速开始) • [自动化测试](#-自动化测试) • [Windows 用户手册](docs/manual/README.md) • [质量签收报告](docs/qa/05-final-qa-signoff-report.md)
 
 </div>
 
@@ -39,12 +39,14 @@ Tiny Markdown Editor（Tiny MD）是一款轻量级且灵活的 Markdown 编辑�
 
 ### 📝 基础编辑
 
-- ✅ 四栏布局（文件管理器 / 源码 / 预览 / 翻译），面板可拖动调整大小
-- ✅ 实时 Markdown 预览与同步滚动
-- ✅ 代码块语法高亮（内置 20+ 常用语言）
-- ✅ 快捷编辑工具栏（标题、加粗、列表、表格、代码块等）
-- ✅ 语法提示（未闭合标记、空链接等低干扰提示）
-- ✅ Markdown 渲染输出经 DOMPurify 净化，防御 XSS
+- ✅ 四栏布局（文件管理器 / 源码 / 预览 / 翻译），面板可拖动调整大小，1280×720 及以上零水平溢出
+- ✅ 实时 Markdown 预览、**KaTeX 数学公式渲染**（行内 `$...$` / 块级 `$$...$$`）与同步滚动
+- ✅ 代码块语法高亮（内置 20+ 常用语言，离线可用）
+- ✅ 快捷编辑工具栏（16 项中英文双语快捷操作）与完整快捷键（`Ctrl+B/I/K/S/Shift+S/Shift+Y/Shift+P`）
+- ✅ 智能语法提示（自动忽略代码块与无序列表 `*`）与大文档性能保护（1MB 输入延迟 < 50ms）
+- ✅ Markdown 渲染输出经 DOMPurify 严格净化 + 自定义 CSS 逃逸防护 + Electron `sandbox: true` 沙盒隔离
+- ✅ 预览区一键切换 **显示 / 隐藏 YAML**，支持 **导出 HTML** 与 **打印 / 导出 PDF**
+- ✅ YAML 模板支持 **JSON 一键导入 / 导出**，翻译结果支持一键 **应用** 写回源码区
 
 ### 📁 文件管理器
 
@@ -100,15 +102,41 @@ Tiny Markdown Editor（Tiny MD）是一款轻量级且灵活的 Markdown 编辑�
 
 ## 📥 下载安装
 
-### 桌面版（推荐）
+### 桌面版（Windows 推荐）
 
-前往 [GitHub Releases](https://github.com/cxlcym/Tiny-MD/releases) 下载对应平台的便携版，无需安装，下载后双击即可运行。
+本地打包产物位于 `release/` 目录，提供两种开箱即用的 Windows (x64) 安装方式：
 
-| 平台 | 格式 |
-|------|------|
-| Windows | 便携版 `.exe` |
-| macOS | `.dmg` |
-| Linux | `.AppImage` |
+| 平台 | 产物文件 | 说明 |
+|------|----------|------|
+| Windows 安装向导 | `release/Tiny MD Setup 1.0.2.exe` | 标准 NSIS 安装程序，支持自定义安装路径、创建桌面/开始菜单快捷方式及标准卸载 |
+| Windows 绿色便携版 | `release/Tiny MD 1.0.2.exe` | 免安装，下载后双击即可运行 |
+
+> 详细安装步骤、Windows SmartScreen 放行指引、图床/LLM 配置与 FAQ 请参阅 👉 **[Windows 用户操作使用手册](docs/manual/README.md)**。
+
+### 🧪 自动化测试
+
+```bash
+# 代码规范检查
+npm run lint
+
+# 运行全部单元测试 (107 条 Vitest 用例)
+npm run test:unit
+
+# 运行单元测试并生成 v8 覆盖率报告
+npm run test:coverage
+
+# 运行 Playwright Web E2E、5 类 XSS 安全与 100KB/1MB/5MB 性能压测
+npm run test:e2e
+
+# 运行 Playwright Windows Electron 桌面端自动化测试
+npm run test:electron
+
+# 一键运行全套测试 (单元 + Web E2E + Electron)
+npm run test:all
+
+# 打包 Windows NSIS 安装包与绿色便携版
+npm run electron:build:win
+```
 
 ### Web 版
 
@@ -357,6 +385,6 @@ tiny-md/
 <div align="center">
 
 Made with ❤️ by jack Cao
-Powered by OpenCode + MiMo V2 Pro
+Powered by Gemini 4 Neon
 
 </div>

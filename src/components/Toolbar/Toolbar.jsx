@@ -3,7 +3,7 @@ import { t } from '../../utils/i18n'
 import StyleSelector from '../StyleSelector/StyleSelector'
 import './Toolbar.css'
 
-function Toolbar({ onNew, onOpen, onSave, onSaveAs, onYAMLTemplate, onImageUpload, onSettings, currentStyle, onStyleChange, customStyles, onCustomStylesChange, lang, isModified }) {
+function Toolbar({ onNew, onOpen, onSave, onSaveAs, onExportHtml, onExportPdf, onYAMLTemplate, onImageUpload, onSettings, currentStyle, onStyleChange, customStyles, onCustomStylesChange, lang, isModified }) {
   const [showAbout, setShowAbout] = useState(false)
 
   return (
@@ -57,6 +57,26 @@ function Toolbar({ onNew, onOpen, onSave, onSaveAs, onYAMLTemplate, onImageUploa
         </button>
       </div>
 
+      {(onExportHtml || onExportPdf) && (
+        <>
+          <div className="toolbar-divider" />
+          <div className="toolbar-group">
+            {onExportHtml && (
+              <button className="toolbar-btn" onClick={onExportHtml} title={t('exportHtml', lang)}>
+                <span className="btn-icon">🌐</span>
+                <span className="btn-text">{t('exportHtml', lang)}</span>
+              </button>
+            )}
+            {onExportPdf && (
+              <button className="toolbar-btn" onClick={onExportPdf} title={t('exportPdf', lang)}>
+                <span className="btn-icon">🖨️</span>
+                <span className="btn-text">{t('exportPdf', lang)}</span>
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
       <div className="toolbar-spacer" />
 
       <div className="toolbar-group">
@@ -71,7 +91,7 @@ function Toolbar({ onNew, onOpen, onSave, onSaveAs, onYAMLTemplate, onImageUploa
           <div className="about-modal" onClick={(e) => e.stopPropagation()}>
             <div className="about-header">
               <h2>Tiny MD</h2>
-              <span className="about-version">V1.0.0</span>
+              <span className="about-version">V1.0.2</span>
               <button className="close-btn" onClick={() => setShowAbout(false)}>×</button>
             </div>
             <div className="about-content">

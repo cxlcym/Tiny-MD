@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo, useDeferredValue } from 'react'
 import Toolbar from './components/Toolbar/Toolbar'
 import FileManager from './components/FileManager/FileManager'
 import Editor from './components/Editor/Editor'
@@ -13,6 +13,7 @@ import HljsTheme from './components/HljsTheme/HljsTheme'
 import { useFileWorkspace, DEFAULT_CONTENT } from './hooks/useFileWorkspace'
 import { useLocalStorage } from './hooks/useLocalStorage'
 import { extractYAML, replaceYAML } from './utils/yaml'
+import { extractMarkdownBody, renderMarkdown } from './utils/markdown'
 import { PRESET_STYLES } from './components/StyleSelector/StyleSelector'
 import { convertToWebP, blobToDataURL, saveImageFile, openLocalImage, isDesktop } from './utils/imageUtils'
 import { t } from './utils/i18n'
@@ -77,6 +78,7 @@ function App() {
   const [showYAMLModal, setShowYAMLModal] = useState(false)
   const [showImageUpload, setShowImageUpload] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showPreviewYAML, setShowPreviewYAML] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [panelSizes, setPanelSizes] = useState(() => {
     const stored = readStoredJSON('tiny-md-panel-sizes')
@@ -167,10 +169,21 @@ photos: []
     return true
   }, [isModifiedRef, lang])
 
+  // Debounce preview & word count for large docs (>50KB) to keep typing latency < 50ms
+  const [debouncedLargeContent, setDebouncedLargeContent] = useState(content)
+  useEffect(() => {
+    if (content.length <= 50 * 1024) return
+    const timer = setTimeout(() => setDebouncedLargeContent(content), 150)
+    return () => clearTimeout(timer)
+  }, [content])
+
+  const effectivePreviewContent = content.length > 50 * 1024 ? debouncedLargeContent : content
+  const deferredContent = useDeferredValue(effectivePreviewContent)
+
   // Calculate word count (CJK-aware)
   const wordCount = useMemo(() => {
-    const { body, hasYAML } = extractYAML(content)
-    const text = hasYAML ? body : content
+    const { body, hasYAML } = extractYAML(deferredContent)
+    const text = hasYAML ? body : deferredContent
     const trimmed = text.trim()
     if (!trimmed) return 0
     if (typeof Intl !== 'undefined' && Intl.Segmenter) {
@@ -182,7 +195,7 @@ photos: []
       return count
     }
     return trimmed.split(/\s+/).filter(Boolean).length
-  }, [content])
+  }, [deferredContent])
 
   // Clean up image map entries no longer referenced in content
   useEffect(() => {
@@ -717,28 +730,53 @@ photos: []
     }
   }, [checkUnsaved, readDirectory, loadFileContent, lang, replaceFiles, upsertFile])
 
-  // Keyboard shortcuts (must be after all handler definitions)
+  const handleExportHtml = useCallback(() => {
+    const safeHtml = renderMarkdown(extractMarkdownBody(content))
+    const docHtml = `<!DOCTYPE html>
+<html lang="${config.language}">
+<head>
+<meta charset="UTF-8" />
+<title>${fileName.replace(/\.md$/i, '')}</title>
+<style>body{max-width:860px;margin:2rem auto;padding:0 1rem;font-family:system-ui,-apple-system,sans-serif;line-height:1.6;}pre{background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:6px;overflow:auto;}</style>
+</head>
+<body>${safeHtml}</body>
+</html>`
+    const blob = new Blob([docHtml], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fileName.replace(/\.md$/i, '') + '.html'
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [content, config.language, fileName])
+
+  const handleExportPdf = useCallback(() => {
+    window.print()
+  }, [])
+
+  // Keyboard shortcuts (case-insensitive for Windows Ctrl+Shift+S/Y/P)
   useEffect(() => {
     const handleKeyDown = (e) => {
       const isCtrl = e.ctrlKey || e.metaKey
+      const key = (e.key || '').toLowerCase()
 
-      if (isCtrl && e.key === 's') {
+      if (isCtrl && key === 's') {
         e.preventDefault()
         if (e.shiftKey) {
           handleSaveAsFile()
         } else {
           handleSaveFile()
         }
-      } else if (isCtrl && e.key === 'n') {
+      } else if (isCtrl && !e.shiftKey && key === 'n') {
         e.preventDefault()
         handleNewFile()
-      } else if (isCtrl && e.key === 'o') {
+      } else if (isCtrl && !e.shiftKey && key === 'o') {
         e.preventDefault()
         handleOpenFile()
-      } else if (isCtrl && e.shiftKey && e.key === 'Y') {
+      } else if (isCtrl && e.shiftKey && key === 'y') {
         e.preventDefault()
         setShowYAMLModal(true)
-      } else if (isCtrl && e.shiftKey && e.key === 'P') {
+      } else if (isCtrl && e.shiftKey && key === 'p') {
         e.preventDefault()
         setShowImageUpload(true)
       }
@@ -756,6 +794,8 @@ photos: []
         onOpen={handleOpenFile}
         onSave={handleSaveFile}
         onSaveAs={handleSaveAsFile}
+        onExportHtml={handleExportHtml}
+        onExportPdf={handleExportPdf}
         onYAMLTemplate={() => setShowYAMLModal(true)}
         onImageUpload={() => setShowImageUpload(true)}
         onSettings={() => setShowSettings(true)}
@@ -800,6 +840,7 @@ photos: []
             content={content}
             onChange={setContent}
             onSelectLocalImage={handleSelectLocalImage}
+            lang={config.language}
           />
           <div className="panel-content">
             <Editor
@@ -817,18 +858,34 @@ photos: []
         </div>
 
         <div className="panel" style={{ width: `${panelSizes[2]}%` }}>
-          <div className="panel-header">
-            {t('previewPanel', config.language)}
+          <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>{t('previewPanel', config.language)}</span>
+            <button
+              className="yaml-toggle-btn"
+              onClick={() => setShowPreviewYAML((prev) => !prev)}
+              style={{
+                background: 'transparent',
+                border: '1px solid var(--border-color)',
+                color: 'var(--text-secondary)',
+                fontSize: '11px',
+                padding: '1px 6px',
+                borderRadius: '3px',
+                cursor: 'pointer',
+              }}
+            >
+              {showPreviewYAML ? t('hideYaml', config.language) : t('showYaml', config.language)}
+            </button>
           </div>
           <div className="panel-content" ref={previewRef}>
             <Preview
-              content={content}
+              content={deferredContent}
               theme={config.theme}
               imageMap={imageMap}
               currentStyle={currentStyle}
               customStyles={customStyles}
               currentFilePath={state.currentPath}
               currentFolderPath={currentFolderPath}
+              showYAML={showPreviewYAML}
             />
           </div>
           <div className="resize-handle" onMouseDown={(e) => handleMouseDown(2, e)}>
@@ -842,6 +899,7 @@ photos: []
           </div>
           <Translation
             content={content}
+            onTranslated={setContent}
             lang={config.language}
             llmConfig={{
               apiKey: config.llmApiKey,
@@ -876,6 +934,7 @@ photos: []
           lang={config.language}
           content={content}
           onContentChange={setContent}
+          imageMap={imageMap}
           picgoConfig={{
             endpoint: config.picgoEndpoint,
             uploadPath: config.picgoUploadPath

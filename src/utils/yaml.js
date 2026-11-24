@@ -1,39 +1,40 @@
-// More robust YAML front matter regex
-// Matches --- at start, content, and --- at end (with optional trailing newline)
-const YAML_REGEX = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
+const YAML_REGEX = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/
 
-export function extractYAML(content) {
+export function extractYAML(content = '') {
+  if (typeof content !== 'string') {
+    return { yaml: '', yamlContent: '', body: '', hasYAML: false }
+  }
   const match = content.match(YAML_REGEX)
   if (match) {
     return {
       yaml: match[0].trimEnd(),
-      yamlContent: match[1],
+      yamlContent: match[1].replace(/\r\n/g, '\n'),
       body: content.slice(match[0].length).trim(),
-      hasYAML: true
+      hasYAML: true,
     }
   }
   return {
     yaml: '',
     yamlContent: '',
     body: content,
-    hasYAML: false
+    hasYAML: false,
   }
 }
 
-export function replaceYAML(content, newYAML) {
-  const { hasYAML } = extractYAML(content)
+export function replaceYAML(content = '', newYAML) {
+  const { hasYAML, body } = extractYAML(content)
   if (hasYAML) {
-    return content.replace(YAML_REGEX, newYAML)
+    return body ? `${newYAML}\n\n${body}` : newYAML
   }
-  return `${newYAML}\n\n${content}`
+  return body ? `${newYAML}\n\n${body}` : newYAML
 }
 
-export function parseYAML(yamlString) {
+export function parseYAML(yamlString = '') {
   const result = {}
-  const lines = yamlString.split('\n')
+  const lines = yamlString.replace(/\r\n/g, '\n').split('\n')
 
   for (const line of lines) {
-    const match = line.match(/^(\w+):\s*(.*)$/)
+    const match = line.match(/^([\w-]+):\s*(.*)$/)
     if (match) {
       const [, key, value] = match
       result[key] = value.trim()

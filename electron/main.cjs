@@ -54,8 +54,9 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.cjs'),
-      sandbox: false
+      sandbox: true
     },
+    icon: path.join(__dirname, '..', 'build', 'icon.ico'),
     show: false,
     backgroundColor: '#1e1e1e',
     title: 'Tiny MD',
@@ -82,10 +83,11 @@ function createWindow() {
     mainWindow = null
   })
 
-  if (!app.isPackaged) {
-    mainWindow.loadURL('http://localhost:5173')
+  const devUrl = process.env.VITE_DEV_SERVER_URL
+  if (!app.isPackaged && devUrl) {
+    mainWindow.loadURL(devUrl)
   } else {
-    mainWindow.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'))
+    mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   }
 }
 

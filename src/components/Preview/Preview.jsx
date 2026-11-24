@@ -1,6 +1,7 @@
 import { useMemo, useEffect, useState } from 'react'
 import { PRESET_STYLES } from '../StyleSelector/StyleSelector'
-import { extractMarkdownBody, renderMarkdown } from '../../utils/markdown'
+import { extractMarkdownBody, renderMarkdown, sanitizeCustomCss } from '../../utils/markdown'
+import { extractYAML } from '../../utils/yaml'
 import './Preview.css'
 
 // Check if path is a local file path (not URL)
@@ -63,14 +64,14 @@ function resolveImagePath(src, currentFilePath, currentFolderPath) {
 // Check if running in Electron
 const isDesktop = window.electronAPI?.isElectron === true
 
-function Preview({ content, theme, imageMap, currentStyle, customStyles, currentFilePath, currentFolderPath }) {
+function Preview({ content, theme, imageMap, currentStyle, customStyles, currentFilePath, currentFolderPath, showYAML = false }) {
   const [loadedImages, setLoadedImages] = useState({})
 
-  // Get current style CSS
+  // Get current style CSS (sanitized against </style> breakout)
   const styleCss = useMemo(() => {
     const allStyles = [...PRESET_STYLES, ...(customStyles || [])]
     const style = allStyles.find(s => s.id === currentStyle)
-    return style?.css || ''
+    return sanitizeCustomCss(style?.css || '')
   }, [currentStyle, customStyles])
 
   // Extract all image paths from content
@@ -154,8 +155,14 @@ function Preview({ content, theme, imageMap, currentStyle, customStyles, current
       return match
     })
 
-    return renderMarkdown(body)
-  }, [content, imageMap, loadedImages])
+    const renderedBody = renderMarkdown(body)
+    if (!showYAML) return renderedBody
+
+    const { yamlContent, hasYAML } = extractYAML(content || '')
+    if (!hasYAML) return renderedBody
+    const escapedYaml = yamlContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    return `<pre class="yaml-frontmatter-preview"><code>${escapedYaml}</code></pre>${renderedBody}`
+  }, [content, imageMap, loadedImages, showYAML])
 
   return (
     <div className={`preview-container ${theme}`}>

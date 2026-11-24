@@ -5,7 +5,19 @@ import './ImageUpload.css'
 
 const isDesktop = window.electronAPI?.isElectron === true
 
-function ImageUpload({ onClose, lang, content, onContentChange, picgoConfig }) {
+function dataURLToBlob(dataUrl) {
+  const [header, base64Data] = dataUrl.split(',')
+  const mimeMatch = header.match(/data:([^;]+);/)
+  const mime = mimeMatch ? mimeMatch[1] : 'image/webp'
+  const binary = atob(base64Data)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return new Blob([bytes], { type: mime })
+}
+
+function ImageUpload({ onClose, lang, content, onContentChange, picgoConfig, imageMap = {} }) {
   const [isUploading, setIsUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState([])
   const [config, setConfig] = useState(() => {
@@ -15,8 +27,13 @@ function ImageUpload({ onClose, lang, content, onContentChange, picgoConfig }) {
         uploadPath: picgoConfig.uploadPath
       }
     }
-    const saved = localStorage.getItem('tiny-md-picgo-config')
-    return saved ? JSON.parse(saved) : {
+    try {
+      const saved = localStorage.getItem('tiny-md-picgo-config')
+      if (saved) return JSON.parse(saved)
+    } catch {
+      // Fallback to default config on corrupt JSON
+    }
+    return {
       endpoint: 'http://127.0.0.1:36677',
       uploadPath: '/upload'
     }
@@ -27,8 +44,11 @@ function ImageUpload({ onClose, lang, content, onContentChange, picgoConfig }) {
     picgoService.updateConfig(config)
   }, [config])
 
-  // Read local image file (desktop version uses electron API)
+  // Read local image file (prefer imageMap data URL, then desktop electron API, then fetch)
   const readLocalImage = useCallback(async (imagePath) => {
+    const normalized = imagePath.replace(/\\/g, '/')
+    if (imageMap?.[normalized]) return dataURLToBlob(imageMap[normalized])
+    if (imageMap?.[imagePath]) return dataURLToBlob(imageMap[imagePath])
     if (isDesktop) {
       const result = await window.electronAPI.readImage({ filePath: imagePath })
       if (result.success) {
@@ -49,7 +69,7 @@ function ImageUpload({ onClose, lang, content, onContentChange, picgoConfig }) {
       }
       return await response.blob()
     }
-  }, [])
+  }, [imageMap])
 
   // Batch upload - find all local images and upload to PicGo
   const handleBatchUpload = useCallback(async () => {

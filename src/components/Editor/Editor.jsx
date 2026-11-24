@@ -9,81 +9,97 @@ import { autocompletion, closeBrackets } from '@codemirror/autocomplete'
 import { linter } from '@codemirror/lint'
 import './Editor.css'
 
-// Markdown syntax hints. Deliberately low-severity: the heuristics below flag
-// plenty of legitimate markdown (multi-line bold, literal asterisks), so these
-// are hints, not errors.
-const markdownLinter = linter((view) => {
+function wrapSelection(view, before, after, fallbackText) {
+  const { from, to } = view.state.selection.main
+  const selected = view.state.sliceDoc(from, to) || fallbackText
+  view.dispatch({
+    changes: { from, to, insert: `${before}${selected}${after}` },
+    selection: { anchor: from + before.length, head: from + before.length + selected.length },
+  })
+  return true
+}
+
+export function lintMarkdownDoc(docText, getLineStart) {
+  if (docText.length > 100 * 1024) return []
+
   const diagnostics = []
-  const doc = view.state.doc.toString()
-  const lines = doc.split('\n')
+  const lines = docText.split('\n')
+  let inCodeFence = false
 
   lines.forEach((line, lineIndex) => {
-    if (!line.trim()) return
+    const trimmed = line.trim()
+    if (trimmed.startsWith('```')) {
+      inCodeFence = !inCodeFence
+      return
+    }
+    if (inCodeFence || !trimmed) return
 
-    const lineStart = view.state.doc.line(lineIndex + 1).from
+    const lineStart = getLineStart(lineIndex + 1)
+    const strippedLine = line.replace(/`[^`]+`/g, (m) => ' '.repeat(m.length))
 
-    // Check for unclosed bold
-    const boldCount = (line.match(/\*\*/g) || []).length
+    const boldCount = (strippedLine.match(/\*\*/g) || []).length
     if (boldCount % 2 !== 0) {
-      const lastBold = line.lastIndexOf('**')
+      const lastBold = strippedLine.lastIndexOf('**')
       if (lastBold !== -1) {
         diagnostics.push({
           from: lineStart + lastBold,
           to: lineStart + lastBold + 2,
           severity: 'info',
-          message: 'Unclosed bold marker **'
+          message: 'Unclosed bold marker **',
         })
       }
     }
 
-    // Check for unclosed italic (single *)
+    const lineForItalic = strippedLine.replace(/^(\s*)\*(\s+)/, '$1 $2')
     let singleStarCount = 0
-    for (let i = 0; i < line.length; i++) {
-      if (line[i] === '*' && line[i-1] !== '*' && line[i+1] !== '*') {
+    for (let i = 0; i < lineForItalic.length; i++) {
+      if (lineForItalic[i] === '*' && lineForItalic[i - 1] !== '*' && lineForItalic[i + 1] !== '*') {
         singleStarCount++
       }
     }
     if (singleStarCount % 2 !== 0) {
-      const lastItalic = line.lastIndexOf('*')
-      if (lastItalic !== -1 && line[lastItalic - 1] !== '*' && line[lastItalic + 1] !== '*') {
+      const lastItalic = lineForItalic.lastIndexOf('*')
+      if (lastItalic !== -1 && lineForItalic[lastItalic - 1] !== '*' && lineForItalic[lastItalic + 1] !== '*') {
         diagnostics.push({
           from: lineStart + lastItalic,
           to: lineStart + lastItalic + 1,
           severity: 'info',
-          message: 'Unclosed italic marker *'
+          message: 'Unclosed italic marker *',
         })
       }
     }
 
-    // Check for empty links
-    const emptyLinkMatch = line.match(/\]\(\)/g)
+    const emptyLinkMatch = strippedLine.match(/\]\(\)/g)
     if (emptyLinkMatch) {
-      const pos = line.indexOf('](')
+      const pos = strippedLine.indexOf('](')
       diagnostics.push({
         from: lineStart + pos,
         to: lineStart + pos + 3,
         severity: 'warning',
-        message: 'Empty link URL'
+        message: 'Empty link URL',
       })
     }
   })
 
   return diagnostics
+}
+
+const markdownLinter = linter((view) => {
+  return lintMarkdownDoc(view.state.doc.toString(), (n) => view.state.doc.line(n).from)
 }, { delay: 750 })
 
 const Editor = forwardRef(({ value, onChange, onCursorChange, onScroll, theme }, ref) => {
   const editorRef = useRef(null)
   const viewRef = useRef(null)
   const themeRef = useRef(theme)
+  const lastEmittedRef = useRef(value)
+  const changeTimerRef = useRef(null)
 
-  // Keep latest callbacks accessible from the once-initialized editor without
-  // re-creating the EditorView
   const handlersRef = useRef({ onChange, onCursorChange, onScroll })
   useEffect(() => {
     handlersRef.current = { onChange, onCursorChange, onScroll }
   })
 
-  // Update theme ref when theme changes
   useEffect(() => {
     themeRef.current = theme
     if (editorRef.current) {
@@ -91,7 +107,6 @@ const Editor = forwardRef(({ value, onChange, onCursorChange, onScroll, theme },
     }
   }, [theme])
 
-  // Expose editor view to parent
   useImperativeHandle(ref, () => ({
     getView: () => viewRef.current,
     getState: () => viewRef.current?.state,
@@ -103,7 +118,7 @@ const Editor = forwardRef(({ value, onChange, onCursorChange, onScroll, theme },
         const { from } = view.state.selection.main
         view.dispatch({
           changes: { from, to: from, insert: text },
-          selection: { anchor: from + text.length }
+          selection: { anchor: from + text.length },
         })
         view.focus()
         return true
@@ -116,7 +131,7 @@ const Editor = forwardRef(({ value, onChange, onCursorChange, onScroll, theme },
         const insertPos = Math.min(Math.max(0, pos), view.state.doc.length)
         view.dispatch({
           changes: { from: insertPos, to: insertPos, insert: text },
-          selection: { anchor: insertPos + text.length }
+          selection: { anchor: insertPos + text.length },
         })
         view.focus()
         return true
@@ -129,10 +144,9 @@ const Editor = forwardRef(({ value, onChange, onCursorChange, onScroll, theme },
         return view.state.selection.main.head
       }
       return -1
-    }
+    },
   }))
 
-  // Initialize editor once
   useEffect(() => {
     if (!editorRef.current) return
 
@@ -151,71 +165,55 @@ const Editor = forwardRef(({ value, onChange, onCursorChange, onScroll, theme },
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         markdownLinter,
         keymap.of([
+          { key: 'Mod-b', run: (v) => wrapSelection(v, '**', '**', 'bold') },
+          { key: 'Mod-i', run: (v) => wrapSelection(v, '*', '*', 'italic') },
+          { key: 'Mod-k', run: (v) => wrapSelection(v, '[', '](url)', 'link text') },
           ...defaultKeymap,
           ...searchKeymap,
-          ...historyKeymap
+          ...historyKeymap,
         ]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
-            handlersRef.current.onChange(update.state.doc.toString())
+            if (update.state.doc.length > 50 * 1024) {
+              if (changeTimerRef.current) clearTimeout(changeTimerRef.current)
+              changeTimerRef.current = setTimeout(() => {
+                const next = update.state.doc.toString()
+                lastEmittedRef.current = next
+                handlersRef.current.onChange(next)
+              }, 120)
+            } else {
+              const next = update.state.doc.toString()
+              lastEmittedRef.current = next
+              handlersRef.current.onChange(next)
+            }
           }
-          const pos = update.state.selection.main.head
-          const line = update.state.doc.lineAt(pos)
-          handlersRef.current.onCursorChange(line.number, pos - line.from + 1)
+          if (update.selectionSet || update.docChanged) {
+            const pos = update.state.selection.main.head
+            const line = update.state.doc.lineAt(pos)
+            handlersRef.current.onCursorChange(line.number, pos - line.from + 1)
+          }
         }),
         EditorView.baseTheme({
-          '&': {
-            height: '100%',
-            fontSize: '14px'
-          },
-          '.cm-scroller': {
-            overflow: 'auto',
-            fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, monospace"
-          },
-          '.cm-content': {
-            padding: '10px 0'
-          },
-          '.cm-line': {
-            padding: '0 10px'
-          }
+          '&': { height: '100%', fontSize: '14px' },
+          '.cm-scroller': { overflow: 'auto', fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, monospace" },
+          '.cm-content': { padding: '10px 0' },
+          '.cm-line': { padding: '0 10px' },
         }),
         EditorView.theme({
-          '&': {
-            backgroundColor: 'var(--cm-bg)',
-            color: 'var(--cm-text)'
-          },
-          '.cm-content': {
-            caretColor: 'var(--cm-cursor)'
-          },
-          '.cm-gutters': {
-            backgroundColor: 'var(--cm-gutter-bg)',
-            color: 'var(--cm-gutter-text)',
-            borderRight: '1px solid var(--cm-gutter-border)'
-          },
-          '.cm-activeLineGutter': {
-            backgroundColor: 'var(--cm-active-line-bg)'
-          },
-          '.cm-activeLine': {
-            backgroundColor: 'var(--cm-active-line-bg)'
-          },
-          '.cm-selectionBackground': {
-            backgroundColor: 'var(--cm-selection-bg)'
-          },
-          '&.cm-focused .cm-selectionBackground': {
-            backgroundColor: 'var(--cm-selection-bg)'
-          }
-        })
-      ]
+          '&': { backgroundColor: 'var(--cm-bg)', color: 'var(--cm-text)' },
+          '.cm-content': { caretColor: 'var(--cm-cursor)' },
+          '.cm-gutters': { backgroundColor: 'var(--cm-gutter-bg)', color: 'var(--cm-gutter-text)', borderRight: '1px solid var(--cm-gutter-border)' },
+          '.cm-activeLineGutter': { backgroundColor: 'var(--cm-active-line-bg)' },
+          '.cm-activeLine': { backgroundColor: 'var(--cm-active-line-bg)' },
+          '.cm-selectionBackground': { backgroundColor: 'var(--cm-selection-bg)' },
+          '&.cm-focused .cm-selectionBackground': { backgroundColor: 'var(--cm-selection-bg)' },
+        }),
+      ],
     })
 
-    const view = new EditorView({
-      state,
-      parent: editorRef.current
-    })
-
+    const view = new EditorView({ state, parent: editorRef.current })
     viewRef.current = view
 
-    // Add scroll listener to the scroller element for real-time sync
     const scroller = view.scrollDOM
     const handleScroll = () => {
       const { onScroll: scrollHandler } = handlersRef.current
@@ -227,33 +225,27 @@ const Editor = forwardRef(({ value, onChange, onCursorChange, onScroll, theme },
     scroller.addEventListener('scroll', handleScroll)
 
     return () => {
+      if (changeTimerRef.current) clearTimeout(changeTimerRef.current)
       scroller.removeEventListener('scroll', handleScroll)
       view.destroy()
       viewRef.current = null
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []) // Initialize once; callbacks are read through handlersRef, value synced below
+  }, [])
 
-  // Sync external value changes into the editor (value is intentionally
-  // compared against the doc rather than re-applied on every keystroke)
   useEffect(() => {
-    if (viewRef.current) {
+    if (viewRef.current && value !== lastEmittedRef.current) {
       const currentContent = viewRef.current.state.doc.toString()
       if (currentContent !== value) {
+        lastEmittedRef.current = value
         viewRef.current.dispatch({
-          changes: {
-            from: 0,
-            to: currentContent.length,
-            insert: value
-          }
+          changes: { from: 0, to: currentContent.length, insert: value },
         })
       }
     }
   }, [value])
 
-  return (
-    <div className={`editor-container cm-theme-${theme}`} ref={editorRef} />
-  )
+  return <div className={`editor-container cm-theme-${theme}`} ref={editorRef} />
 })
 
 Editor.displayName = 'Editor'

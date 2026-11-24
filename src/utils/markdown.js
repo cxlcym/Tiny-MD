@@ -23,6 +23,8 @@ import sql from 'highlight.js/lib/languages/sql'
 import markdown from 'highlight.js/lib/languages/markdown'
 import diff from 'highlight.js/lib/languages/diff'
 import dockerfile from 'highlight.js/lib/languages/dockerfile'
+import katex from 'katex'
+import 'katex/dist/katex.min.css'
 import DOMPurify from 'dompurify'
 import { extractYAML } from './yaml'
 
@@ -48,7 +50,7 @@ const LANGUAGES = {
   sql,
   markdown,
   diff,
-  dockerfile
+  dockerfile,
 }
 
 for (const [name, lang] of Object.entries(LANGUAGES)) {
@@ -71,23 +73,67 @@ marked.use(
       } catch {
         return ''
       }
-    }
+    },
   }),
   {
     breaks: true,
-    gfm: true
+    gfm: true,
   }
 )
 
 export { hljs }
 
-// Strip YAML front matter and return the markdown body
 export function extractMarkdownBody(content) {
   const { body, hasYAML } = extractYAML(content)
   return hasYAML ? body : content
 }
 
-// Render markdown to sanitized HTML (all rendering must go through here)
-export function renderMarkdown(body) {
-  return DOMPurify.sanitize(marked.parse(body))
+function renderMathExpressions(markdownText) {
+  const codeBlocks = []
+  let safeText = markdownText.replace(/```[\s\S]*?```|`[^`\n]+`/g, (match) => {
+    const token = `@@CODE_BLOCK_${codeBlocks.length}@@`
+    codeBlocks.push(match)
+    return token
+  })
+
+  safeText = safeText.replace(/\$\$([\s\S]+?)\$\$/g, (match, expr) => {
+    try {
+      return katex.renderToString(expr.trim(), { displayMode: true, throwOnError: false })
+    } catch {
+      return match
+    }
+  })
+
+  safeText = safeText.replace(/(?<!\\)\$([^\n$]+?)(?<!\\)\$/g, (match, expr) => {
+    if (!expr.trim()) return match
+    try {
+      return katex.renderToString(expr.trim(), { displayMode: false, throwOnError: false })
+    } catch {
+      return match
+    }
+  })
+
+  return safeText.replace(/@@CODE_BLOCK_(\d+)@@/g, (_, idx) => codeBlocks[Number(idx)])
+}
+
+const MAX_PREVIEW_CHARS = 150 * 1024
+
+export function renderMarkdown(body = '') {
+  const isTruncated = body.length > MAX_PREVIEW_CHARS
+  const slice = isTruncated ? body.slice(0, MAX_PREVIEW_CHARS) : body
+  const withMath = renderMathExpressions(slice)
+  const rawHtml = marked.parse(withMath)
+  const notice = isTruncated
+    ? '<blockquote class="large-doc-notice">Large document preview mode: displaying first 150KB for smooth editing performance.</blockquote>'
+    : ''
+
+  return DOMPurify.sanitize(rawHtml + notice, {
+    USE_PROFILES: { html: true, svg: true, mathMl: true },
+    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'style'],
+    FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur'],
+  })
+}
+
+export function sanitizeCustomCss(css = '') {
+  return String(css).replace(/<\/style/gi, '').replace(/<script[\s\S]*?<\/script>/gi, '')
 }
